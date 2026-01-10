@@ -12,7 +12,7 @@ LABEL version="${APP_VERSION}"
 # Override with docker compose / docker run -e
 ENV LEAN_SERVER_LEAN_VERSION=${LEAN_SERVER_LEAN_VERSION} \
     LEAN_SERVER_HOST=0.0.0.0 \
-    LEAN_SERVER_PORT=10000 \
+    LEAN_SERVER_PORT=8000 \
     LEAN_SERVER_LOG_LEVEL=INFO \
     LEAN_SERVER_ENVIRONMENT=prod \
     LEAN_SERVER_LEAN_VERSION=${LEAN_SERVER_LEAN_VERSION} \
@@ -50,7 +50,7 @@ RUN uv export --extra server --no-dev --no-emit-project > requirements.txt \
  && pip install --no-cache-dir -e . \
  && prisma generate
 
-EXPOSE 10000
+EXPOSE 8000
 
 
 CMD ["python", "-m", "server"]
