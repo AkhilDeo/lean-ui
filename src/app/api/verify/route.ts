@@ -13,6 +13,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (!process.env.KIMINA_SERVER_URL && process.env.NODE_ENV === 'production') {
+      return NextResponse.json(
+        { 
+          pass: false, 
+          error: 'KIMINA_SERVER_URL environment variable is not configured. Please set it in your Vercel project settings.',
+        },
+        { status: 200 }
+      );
+    }
+
     const response = await fetch(`${KIMINA_LEAN_SERVER_URL}/api/check`, {
       method: 'POST',
       headers: {
@@ -26,6 +36,7 @@ export async function POST(request: NextRequest) {
           },
         ],
       }),
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!response.ok) {
@@ -82,10 +93,23 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Verification error:', error);
+    
+    let errorMessage = 'Unknown error occurred';
+    
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        errorMessage = 'Request timeout: The Lean server took too long to respond (>30s)';
+      } else if (error.message.includes('fetch failed')) {
+        errorMessage = `Cannot connect to Lean server at ${KIMINA_LEAN_SERVER_URL}. Please check: 1) KIMINA_SERVER_URL is set correctly in Vercel, 2) The backend server is running and accessible, 3) Network/firewall settings allow the connection.`;
+      } else {
+        errorMessage = error.message;
+      }
+    }
+    
     return NextResponse.json(
       { 
         pass: false, 
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
+        error: errorMessage,
       },
       { status: 200 }
     );
