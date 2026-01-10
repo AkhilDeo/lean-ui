@@ -18,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent  # Repository root directory
 
 class Settings(BaseSettings):
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = int(os.getenv("PORT", os.getenv("LEAN_SERVER_PORT", "10000")))
     log_level: str = "INFO"
 
     api_key: str | None = None
