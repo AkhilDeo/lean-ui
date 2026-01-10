@@ -88,7 +88,7 @@ export function VerificationPanel({ result, isLoading }: VerificationPanelProps)
               {result.errors.map((error, index) => (
                 <div
                   key={index}
-                  className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-sm font-mono whitespace-pre-wrap"
+                  className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-sm font-mono whitespace-pre-wrap break-words overflow-wrap-anywhere"
                 >
                   {error}
                 </div>
@@ -107,7 +107,7 @@ export function VerificationPanel({ result, isLoading }: VerificationPanelProps)
               {result.warnings.map((warning, index) => (
                 <div
                   key={index}
-                  className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-sm font-mono whitespace-pre-wrap"
+                  className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-sm font-mono whitespace-pre-wrap break-words overflow-wrap-anywhere"
                 >
                   {warning}
                 </div>

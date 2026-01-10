@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { CodeEditor } from './CodeEditor';
 import { VerificationPanel } from './VerificationPanel';
@@ -35,6 +35,9 @@ export function LeanVerifier() {
   const [currentResult, setCurrentResult] = useState<VerificationResult | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showClearDialog, setShowClearDialog] = useState(false);
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeRef = useRef<HTMLDivElement>(null);
 
   const {
     history,
@@ -177,6 +180,39 @@ export function LeanVerifier() {
     }
   }, [isLoaded, history, selectedId]);
 
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const newWidth = window.innerWidth - e.clientX;
+      if (newWidth >= 300 && newWidth <= 800) {
+        setRightSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
+
   if (!isLoaded) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
@@ -255,10 +291,20 @@ export function LeanVerifier() {
             </div>
           </div>
 
-          <Separator orientation="vertical" />
+          {/* Resize Handle */}
+          <div
+            className="w-1 bg-border hover:bg-primary/50 cursor-col-resize transition-colors relative group"
+            onMouseDown={handleMouseDown}
+          >
+            <div className="absolute inset-y-0 -left-1 -right-1" />
+          </div>
 
           {/* Results Panel */}
-          <div className="w-96 shrink-0 bg-card">
+          <div
+            ref={resizeRef}
+            className="shrink-0 bg-card"
+            style={{ width: `${rightSidebarWidth}px` }}
+          >
             <VerificationPanel result={currentResult} isLoading={isVerifying} />
           </div>
         </div>
