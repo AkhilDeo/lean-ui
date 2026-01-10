@@ -1,3 +1,4 @@
+import asyncio
 import textwrap
 import threading
 from contextlib import asynccontextmanager
@@ -48,7 +49,14 @@ def create_app(settings: Settings) -> FastAPI:
             init_repls=settings.init_repls,
         )
         app.state.manager = manager
-        await app.state.manager.initialize_repls()
+
+        async def _init_repls_background() -> None:
+            try:
+                await manager.initialize_repls()
+            except Exception as e:
+                logger.exception("Failed to initialize REPLs in background: %s", e)
+
+        asyncio.create_task(_init_repls_background())
 
         if settings.environment == Environment.dev:
             threading.Timer(
