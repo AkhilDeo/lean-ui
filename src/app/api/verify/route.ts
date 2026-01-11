@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
             code: code,
           },
         ],
+        reuse: false,
       }),
       signal: AbortSignal.timeout(30000),
     });
