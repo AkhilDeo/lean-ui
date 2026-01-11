@@ -37,8 +37,10 @@ def create_app(settings: Settings) -> FastAPI:
         if settings.database_url:
             logger.info(f"Database URL = '{settings.database_url}'")
             try:
-                await db.connect()
+                await asyncio.wait_for(db.connect(), timeout=10.0)
                 logger.info("DB connected: {}", db.connected)
+            except asyncio.TimeoutError:
+                logger.warning("Database connection timed out after 10 seconds")
             except Exception as e:
                 logger.exception("Failed to connect to database: %s", e)
 
