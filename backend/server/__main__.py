@@ -31,6 +31,7 @@ if __name__ == "__main__":
         logging.getLogger(name).handlers = []
         logging.getLogger(name).propagate = True
 
+    logger.info(f"Starting uvicorn server on {settings.host}:{settings.port}")
     uvicorn.run(
         app,
         host=settings.host,

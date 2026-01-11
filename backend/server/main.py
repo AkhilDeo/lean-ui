@@ -29,9 +29,11 @@ def create_app(settings: Settings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info(
-            "Running Kimina Lean Server [bold]'v{}'[/bold] in [bold]{}[/bold] mode with Lean version: '{}'",
+            "Running Kimina Lean Server [bold]'v{}'[/bold] in [bold]{}[/bold] mode on {}:{} with Lean version: '{}'",
             __version__,
             settings.environment.value,
+            settings.host,
+            settings.port,
             settings.lean_version,
         )
         if settings.database_url:
@@ -54,7 +56,9 @@ def create_app(settings: Settings) -> FastAPI:
 
         async def _init_repls_background() -> None:
             try:
+                logger.info("Starting background REPL initialization...")
                 await manager.initialize_repls()
+                logger.info("Background REPL initialization completed")
             except Exception as e:
                 logger.exception("Failed to initialize REPLs in background: %s", e)
 

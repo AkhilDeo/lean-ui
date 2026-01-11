@@ -18,7 +18,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent  # Repository root directory
 
 class Settings(BaseSettings):
     host: str = "0.0.0.0"
-    port: int = int(os.getenv("PORT", os.getenv("LEAN_SERVER_PORT", "10000")))
+    # Railway provides PORT at runtime. Use 8000 as fallback for local dev
+    port: int = int(os.getenv("PORT", "8000"))
     log_level: str = "INFO"
 
     api_key: str | None = None

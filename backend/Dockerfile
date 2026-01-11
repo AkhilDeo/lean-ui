@@ -10,9 +10,9 @@ ARG MATHLIB_BRANCH=${LEAN_SERVER_LEAN_VERSION}
 LABEL version="${APP_VERSION}"
 
 # Override with docker compose / docker run -e
+# NOTE: Do not set LEAN_SERVER_PORT here - Railway provides PORT at runtime
 ENV LEAN_SERVER_LEAN_VERSION=${LEAN_SERVER_LEAN_VERSION} \
     LEAN_SERVER_HOST=0.0.0.0 \
-    LEAN_SERVER_PORT=8000 \
     LEAN_SERVER_LOG_LEVEL=INFO \
     LEAN_SERVER_ENVIRONMENT=prod \
     LEAN_SERVER_LEAN_VERSION=${LEAN_SERVER_LEAN_VERSION} \
@@ -50,7 +50,8 @@ RUN uv export --extra server --no-dev --no-emit-project > requirements.txt \
  && pip install --no-cache-dir -e . \
  && prisma generate
 
-EXPOSE 8000
+# Railway provides PORT dynamically at runtime, so EXPOSE is not needed
+# EXPOSE 8000
 
 
 CMD ["python", "-m", "server"]
