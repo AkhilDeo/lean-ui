@@ -70,6 +70,7 @@ export function LeanVerifier() {
     addVerification(newVerification);
     setSelectedId(id);
     setCurrentResult(newVerification);
+    setTitle(''); // Clear title field for next verification
 
     try {
       const response = await fetch('/api/verify', {
@@ -130,7 +131,6 @@ export function LeanVerifier() {
       if (verification) {
         setSelectedId(id);
         setCode(verification.code);
-        setTitle(verification.title);
         setCurrentResult(verification);
       }
     },
