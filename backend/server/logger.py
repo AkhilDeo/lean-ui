@@ -9,10 +9,12 @@ from rich.traceback import install
 from .settings import Environment, settings
 
 console = Console()
+LOG_FORMAT = "[job_id={extra[job_id]}] {message}"
 
 
 def setup_logging() -> None:
     logger.remove()
+    logger.configure(extra={"job_id": "-", "task_id": "-", "snippet_id": "-", "endpoint": "-"})
     install(show_locals=True)
 
     if settings.environment == Environment.prod:
@@ -27,7 +29,7 @@ def setup_logging() -> None:
             ),
             colorize=True,
             level=settings.log_level,
-            format="{message}",
+            format=LOG_FORMAT,
             backtrace=True,
             diagnose=True,
         )
@@ -52,7 +54,7 @@ def setup_logging() -> None:
             ),
             colorize=True,
             level=settings.log_level,
-            format="{message}",
+            format=LOG_FORMAT,
             backtrace=True,
             diagnose=True,
         )

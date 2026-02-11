@@ -132,6 +132,7 @@ class RedisAsyncJobs:
             )
 
         job_id = uuid4().hex
+        job_logger = logger.bind(job_id=job_id)
         queued_at = _now_iso()
         expires_at = _expires_iso(self.ttl_sec)
         meta_key = self._meta_key(job_id)
@@ -170,7 +171,7 @@ class RedisAsyncJobs:
         pipe.expire(meta_key, self.ttl_sec)
         pipe.expire(results_key, self.ttl_sec)
         await pipe.execute()
-        logger.info(
+        job_logger.info(
             "Async job metadata stored (redis): job_id={} total={} meta_key={} results_key={} ttl_sec={}",
             job_id,
             n,
@@ -181,7 +182,7 @@ class RedisAsyncJobs:
 
         try:
             await self.queue.enqueue_many(tasks)
-            logger.info(
+            job_logger.info(
                 "Async job enqueued (redis): job_id={} tasks={} queue={}",
                 job_id,
                 len(tasks),
@@ -192,7 +193,7 @@ class RedisAsyncJobs:
                 meta_key,
                 mapping={"status": AsyncJobStatus.failed.value, "error": "enqueue_failed"},
             )
-            logger.exception(
+            job_logger.exception(
                 "Async job enqueue failed (redis): job_id={} queue={} error={}",
                 job_id,
                 self.queue_name,
@@ -221,9 +222,10 @@ class RedisAsyncJobs:
         return out
 
     async def poll(self, job_id: str) -> AsyncPollResponse | None:
+        job_logger = logger.bind(job_id=job_id)
         meta = await self._read_meta(job_id)
         if meta is None:
-            logger.warning("Async poll miss (redis): job_id={}", job_id)
+            job_logger.warning("Async poll miss (redis): job_id={}", job_id)
             return None
 
         status = AsyncJobStatus(meta.get("status", AsyncJobStatus.queued.value))
@@ -243,7 +245,7 @@ class RedisAsyncJobs:
                 parsed.append(deserialize_result(value))
             if len(parsed) == total:
                 results = parsed
-        logger.debug(
+        job_logger.debug(
             "Async poll hit (redis): job_id={} status={} done={} failed={} running={} total={} has_results={}",
             job_id,
             status.value,
@@ -269,9 +271,14 @@ class RedisAsyncJobs:
         return await self.queue.dequeue(timeout_sec=timeout_sec)
 
     async def mark_task_started(self, task: AsyncTaskPayload) -> None:
+        task_logger = logger.bind(
+            job_id=task.job_id,
+            task_id=task.task_id,
+            snippet_id=task.snippet.id,
+        )
         meta_key = self._meta_key(task.job_id)
         if not await self.redis.exists(meta_key):
-            logger.warning(
+            task_logger.warning(
                 "Async task start ignored (redis, missing job): job_id={} task_id={} index={} snippet_id={}",
                 task.job_id,
                 task.task_id,
@@ -288,7 +295,7 @@ class RedisAsyncJobs:
         pipe.expire(meta_key, self.ttl_sec)
         pipe.expire(self._results_key(task.job_id), self.ttl_sec)
         await pipe.execute()
-        logger.info(
+        task_logger.info(
             "Async task started (redis): job_id={} task_id={} index={} snippet_id={}",
             task.job_id,
             task.task_id,
@@ -303,10 +310,15 @@ class RedisAsyncJobs:
         payload: dict[str, Any],
         is_failure: bool,
     ) -> None:
+        task_logger = logger.bind(
+            job_id=task.job_id,
+            task_id=task.task_id,
+            snippet_id=task.snippet.id,
+        )
         meta_key = self._meta_key(task.job_id)
         results_key = self._results_key(task.job_id)
         if not await self.redis.exists(meta_key):
-            logger.warning(
+            task_logger.warning(
                 "Async result write ignored (redis, missing job): job_id={} task_id={} index={} failure={}",
                 task.job_id,
                 task.task_id,
@@ -333,7 +345,7 @@ class RedisAsyncJobs:
         done = int(done_b or 0)
         failed = int(failed_b or 0)
         total = int(total_b or 0)
-        logger.info(
+        task_logger.info(
             "Async result stored (redis): job_id={} task_id={} index={} snippet_id={} failure={} done={} failed={} total={}",
             task.job_id,
             task.task_id,
@@ -352,7 +364,7 @@ class RedisAsyncJobs:
                     "updated_at": _now_iso(),
                 },
             )
-            logger.info(
+            task_logger.info(
                 "Async job completed (redis): job_id={} done={} failed={} total={}",
                 task.job_id,
                 done,
@@ -414,6 +426,7 @@ class InMemoryAsyncJobs:
             )
 
         job_id = uuid4().hex
+        job_logger = logger.bind(job_id=job_id)
         queued_at = _now_iso()
         expires_at = _expires_iso(self.ttl_sec)
         tasks = [
@@ -445,7 +458,7 @@ class InMemoryAsyncJobs:
             self._results[job_id] = [None] * n
 
         await self.queue.enqueue_many(tasks)
-        logger.info(
+        job_logger.info(
             "Async job enqueued (in-memory): job_id={} tasks={} ttl_sec={}",
             job_id,
             len(tasks),
@@ -460,17 +473,18 @@ class InMemoryAsyncJobs:
         )
 
     async def poll(self, job_id: str) -> AsyncPollResponse | None:
+        job_logger = logger.bind(job_id=job_id)
         async with self._lock:
             meta = self._meta.get(job_id)
             if meta is None:
-                logger.warning("Async poll miss (in-memory): job_id={}", job_id)
+                job_logger.warning("Async poll miss (in-memory): job_id={}", job_id)
                 return None
             results = self._results.get(job_id, [])
             finalized = None
             if meta["status"] in {AsyncJobStatus.completed, AsyncJobStatus.failed}:
                 if all(r is not None for r in results):
                     finalized = [r for r in results if r is not None]
-            logger.debug(
+            job_logger.debug(
                 "Async poll hit (in-memory): job_id={} status={} done={} failed={} running={} total={} has_results={}",
                 job_id,
                 meta["status"].value,
@@ -500,10 +514,15 @@ class InMemoryAsyncJobs:
         return await self.queue.dequeue(timeout_sec=timeout_sec)
 
     async def mark_task_started(self, task: AsyncTaskPayload) -> None:
+        task_logger = logger.bind(
+            job_id=task.job_id,
+            task_id=task.task_id,
+            snippet_id=task.snippet.id,
+        )
         async with self._lock:
             meta = self._meta.get(task.job_id)
             if meta is None:
-                logger.warning(
+                task_logger.warning(
                     "Async task start ignored (in-memory, missing job): job_id={} task_id={} index={} snippet_id={}",
                     task.job_id,
                     task.task_id,
@@ -514,7 +533,7 @@ class InMemoryAsyncJobs:
             meta["status"] = AsyncJobStatus.running
             meta["running"] += 1
             meta["updated_at"] = _now_iso()
-            logger.info(
+            task_logger.info(
                 "Async task started (in-memory): job_id={} task_id={} index={} snippet_id={}",
                 task.job_id,
                 task.task_id,
@@ -525,10 +544,15 @@ class InMemoryAsyncJobs:
     async def mark_task_success(
         self, task: AsyncTaskPayload, response: ReplResponse
     ) -> None:
+        task_logger = logger.bind(
+            job_id=task.job_id,
+            task_id=task.task_id,
+            snippet_id=task.snippet.id,
+        )
         async with self._lock:
             meta = self._meta.get(task.job_id)
             if meta is None:
-                logger.warning(
+                task_logger.warning(
                     "Async success write ignored (in-memory, missing job): job_id={} task_id={} index={} snippet_id={}",
                     task.job_id,
                     task.task_id,
@@ -541,7 +565,7 @@ class InMemoryAsyncJobs:
             meta["running"] = max(meta["running"] - 1, 0)
             meta["done"] += 1
             meta["updated_at"] = _now_iso()
-            logger.info(
+            task_logger.info(
                 "Async result stored (in-memory): job_id={} task_id={} index={} snippet_id={} failure=false done={} failed={} total={}",
                 task.job_id,
                 task.task_id,
@@ -553,7 +577,7 @@ class InMemoryAsyncJobs:
             )
             if meta["done"] + meta["failed"] >= meta["total"]:
                 meta["status"] = AsyncJobStatus.completed
-                logger.info(
+                task_logger.info(
                     "Async job completed (in-memory): job_id={} done={} failed={} total={}",
                     task.job_id,
                     meta["done"],
@@ -564,11 +588,16 @@ class InMemoryAsyncJobs:
     async def mark_task_failure(
         self, task: AsyncTaskPayload, error: str, snippet_id: str
     ) -> None:
+        task_logger = logger.bind(
+            job_id=task.job_id,
+            task_id=task.task_id,
+            snippet_id=snippet_id,
+        )
         response = ReplResponse(id=snippet_id, error=error, time=0.0)
         async with self._lock:
             meta = self._meta.get(task.job_id)
             if meta is None:
-                logger.warning(
+                task_logger.warning(
                     "Async failure write ignored (in-memory, missing job): job_id={} task_id={} index={} snippet_id={}",
                     task.job_id,
                     task.task_id,
@@ -581,7 +610,7 @@ class InMemoryAsyncJobs:
             meta["running"] = max(meta["running"] - 1, 0)
             meta["failed"] += 1
             meta["updated_at"] = _now_iso()
-            logger.warning(
+            task_logger.warning(
                 "Async result stored (in-memory): job_id={} task_id={} index={} snippet_id={} failure=true done={} failed={} total={} error={}",
                 task.job_id,
                 task.task_id,
@@ -594,7 +623,7 @@ class InMemoryAsyncJobs:
             )
             if meta["done"] + meta["failed"] >= meta["total"]:
                 meta["status"] = AsyncJobStatus.completed
-                logger.info(
+                task_logger.info(
                     "Async job completed (in-memory): job_id={} done={} failed={} total={}",
                     task.job_id,
                     meta["done"],

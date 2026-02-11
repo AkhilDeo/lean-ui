@@ -22,58 +22,63 @@ async def process_task(
     if task is None:
         return False
 
-    started_at = time.perf_counter()
-    logger.info(
-        "Worker dequeued async task: job_id={} task_id={} index={} snippet_id={} timeout={} debug={} reuse={}",
-        task.job_id,
-        task.task_id,
-        task.index,
-        task.snippet.id,
-        task.timeout,
-        task.debug,
-        task.reuse,
-    )
-    await jobs.mark_task_started(task)
-    try:
-        responses = await run_checks(
-            [task.snippet],
-            timeout=task.timeout,
-            debug=task.debug,
-            manager=manager,
-            reuse=task.reuse,
-            infotree=task.infotree,
-        )
-        await jobs.mark_task_success(task, responses[0])
+    with logger.contextualize(
+        job_id=task.job_id,
+        task_id=task.task_id,
+        snippet_id=task.snippet.id,
+    ):
+        started_at = time.perf_counter()
         logger.info(
-            "Worker completed async task: job_id={} task_id={} index={} snippet_id={} elapsed_sec={:.3f}",
+            "Worker dequeued async task: job_id={} task_id={} index={} snippet_id={} timeout={} debug={} reuse={}",
             task.job_id,
             task.task_id,
             task.index,
             task.snippet.id,
-            time.perf_counter() - started_at,
+            task.timeout,
+            task.debug,
+            task.reuse,
         )
-    except HTTPException as e:
-        await jobs.mark_task_failure(task, str(e.detail), task.snippet.id)
-        logger.warning(
-            "Worker task failed with HTTPException: job_id={} task_id={} index={} snippet_id={} detail={} elapsed_sec={:.3f}",
-            task.job_id,
-            task.task_id,
-            task.index,
-            task.snippet.id,
-            e.detail,
-            time.perf_counter() - started_at,
-        )
-    except Exception as e:
-        logger.exception("Worker failed processing async task {}: {}", task.task_id, e)
-        await jobs.mark_task_failure(task, f"worker_error: {e}", task.snippet.id)
-        logger.error(
-            "Worker task failed with unexpected error: job_id={} task_id={} index={} snippet_id={} elapsed_sec={:.3f}",
-            task.job_id,
-            task.task_id,
-            task.index,
-            task.snippet.id,
-            time.perf_counter() - started_at,
-        )
+        await jobs.mark_task_started(task)
+        try:
+            responses = await run_checks(
+                [task.snippet],
+                timeout=task.timeout,
+                debug=task.debug,
+                manager=manager,
+                reuse=task.reuse,
+                infotree=task.infotree,
+            )
+            await jobs.mark_task_success(task, responses[0])
+            logger.info(
+                "Worker completed async task: job_id={} task_id={} index={} snippet_id={} elapsed_sec={:.3f}",
+                task.job_id,
+                task.task_id,
+                task.index,
+                task.snippet.id,
+                time.perf_counter() - started_at,
+            )
+        except HTTPException as e:
+            await jobs.mark_task_failure(task, str(e.detail), task.snippet.id)
+            logger.warning(
+                "Worker task failed with HTTPException: job_id={} task_id={} index={} snippet_id={} detail={} elapsed_sec={:.3f}",
+                task.job_id,
+                task.task_id,
+                task.index,
+                task.snippet.id,
+                e.detail,
+                time.perf_counter() - started_at,
+            )
+        except Exception as e:
+            logger.exception("Worker failed processing async task {}: {}", task.task_id, e)
+            await jobs.mark_task_failure(task, f"worker_error: {e}", task.snippet.id)
+            logger.error(
+                "Worker task failed with unexpected error: job_id={} task_id={} index={} snippet_id={} elapsed_sec={:.3f}",
+                task.job_id,
+                task.task_id,
+                task.index,
+                task.snippet.id,
+                time.perf_counter() - started_at,
+            )
     return True
 
 

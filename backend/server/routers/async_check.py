@@ -44,7 +44,7 @@ async def submit_async_check(
     jobs: AsyncJobs = Depends(get_async_jobs),
     _: str = Depends(require_key),
 ) -> AsyncSubmitResponse:
-    logger.info(
+    logger.bind(endpoint="api.async.submit").info(
         "Async submit received: snippets={} timeout={} debug={} reuse={} infotree={}",
         len(request.snippets),
         request.timeout,
@@ -54,7 +54,10 @@ async def submit_async_check(
     )
     try:
         response = await jobs.submit(request)
-        logger.info(
+        logger.bind(
+            endpoint="api.async.submit",
+            job_id=response.job_id,
+        ).info(
             "Async submit accepted: job_id={} total_snippets={} expires_at={}",
             response.job_id,
             response.total_snippets,
@@ -62,7 +65,10 @@ async def submit_async_check(
         )
         return response
     except AsyncBacklogFullError as e:
-        logger.warning("Async submit rejected (backlog full): {}", e)
+        logger.bind(endpoint="api.async.submit").warning(
+            "Async submit rejected (backlog full): {}",
+            e,
+        )
         raise HTTPException(status_code=429, detail=str(e)) from e
 
 
@@ -82,18 +88,19 @@ async def get_async_check_status(
     jobs: AsyncJobs = Depends(get_async_jobs),
     _: str = Depends(require_key),
 ) -> AsyncPollResponse:
-    poll = await jobs.poll(job_id)
-    if poll is None:
-        logger.warning("Async poll miss: job_id={}", job_id)
-        raise HTTPException(status_code=404, detail="Async job not found or expired")
-    logger.info(
-        "Async poll: job_id={} status={} done={} failed={} running={} total={} has_results={}",
-        poll.job_id,
-        poll.status,
-        poll.progress.done,
-        poll.progress.failed,
-        poll.progress.running,
-        poll.progress.total,
-        poll.results is not None,
-    )
-    return poll
+    with logger.contextualize(job_id=job_id, endpoint="api.async.poll"):
+        poll = await jobs.poll(job_id)
+        if poll is None:
+            logger.warning("Async poll miss: job_id={}", job_id)
+            raise HTTPException(status_code=404, detail="Async job not found or expired")
+        logger.info(
+            "Async poll: job_id={} status={} done={} failed={} running={} total={} has_results={}",
+            poll.job_id,
+            poll.status,
+            poll.progress.done,
+            poll.progress.failed,
+            poll.progress.running,
+            poll.progress.total,
+            poll.results is not None,
+        )
+        return poll
