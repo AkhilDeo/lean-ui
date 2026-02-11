@@ -9,9 +9,11 @@ from loguru import logger
 from pydantic.json_schema import GenerateJsonSchema
 
 from .__version__ import __version__
+from .async_jobs import create_async_jobs
 from .db import db
 from .logger import setup_logging
 from .manager import Manager
+from .routers.async_check import router as async_check_router
 from .routers.backward import router as backward_router
 from .routers.check import router as check_router
 from .routers.health import router as health_router
@@ -51,8 +53,16 @@ def create_app(settings: Settings) -> FastAPI:
             max_repl_uses=settings.max_repl_uses,
             max_repl_mem=settings.max_repl_mem,
             init_repls=settings.init_repls,
+            min_host_free_mem=settings.min_host_free_mem,
         )
         app.state.manager = manager
+
+        if settings.async_enabled:
+            app.state.async_jobs = await create_async_jobs(settings)
+            logger.info(
+                "Async queue API enabled: queue='{}'",
+                settings.async_queue_name,
+            )
 
         async def _init_repls_background() -> None:
             try:
@@ -83,6 +93,9 @@ def create_app(settings: Settings) -> FastAPI:
 
         yield
 
+        async_jobs = getattr(app.state, "async_jobs", None)
+        if async_jobs is not None:
+            await async_jobs.close()
         await app.state.manager.cleanup()
         await db.disconnect()
 
@@ -103,6 +116,11 @@ def create_app(settings: Settings) -> FastAPI:
         check_router,
         prefix="/api",
         tags=["check"],
+    )
+    app.include_router(
+        async_check_router,
+        prefix="/api",
+        tags=["async-check"],
     )
     app.include_router(
         health_router,

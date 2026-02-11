@@ -39,6 +39,19 @@ class Settings(BaseSettings):
 
     database_url: str | None = None
 
+    # Async queue API / worker
+    async_enabled: bool = False
+    redis_url: str | None = None
+    async_queue_name: str = "lean_async_check"
+    async_result_ttl_sec: int = 86400
+    async_backlog_limit: int = 50000
+    async_max_queue_wait_sec: int = 600
+    async_redis_key_prefix: str = "lean_async"
+    async_use_in_memory_backend: bool = False
+
+    # Host-level memory guard for REPL creation.
+    min_host_free_mem: int = 4
+
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", env_prefix="LEAN_SERVER_"
     )
@@ -60,6 +73,18 @@ class Settings(BaseSettings):
         if isinstance(v, str) and v.strip() == "":
             return os.cpu_count() or 1
         return cast(int, v)
+
+    @field_validator("min_host_free_mem", mode="before")
+    @classmethod
+    def _parse_min_host_free_mem(cls, v: int | str) -> int:
+        if isinstance(v, int):
+            return cast(int, v * 1024)
+        m = re.fullmatch(r"(\d+)([MmGg])", v)
+        if m:
+            n, unit = m.groups()
+            n = int(n)
+            return n if unit.lower() == "m" else n * 1024
+        raise ValueError("min_host_free_mem must be an int or '<number>[M|G]'")
 
 
 settings = Settings()

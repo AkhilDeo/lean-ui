@@ -7,6 +7,7 @@ from time import time
 
 from kimina_client import ReplResponse, Snippet
 from loguru import logger
+import psutil
 
 from .errors import NoAvailableReplError, ReplError
 from .repl import Repl, close_verbose
@@ -22,11 +23,13 @@ class Manager:
         max_repl_uses: int = settings.max_repl_uses,
         max_repl_mem: int = settings.max_repl_mem,
         init_repls: dict[str, int] = settings.init_repls,
+        min_host_free_mem: int = settings.min_host_free_mem,
     ) -> None:
         self.max_repls = max_repls
         self.max_repl_uses = max_repl_uses
         self.max_repl_mem = max_repl_mem
         self.init_repls = init_repls
+        self.min_host_free_mem = min_host_free_mem
 
         self._lock: asyncio.Lock | None = None
         self._cond: asyncio.Condition | None = None
@@ -34,11 +37,25 @@ class Manager:
         self._busy: set[Repl] = set()
 
         logger.info(
-            "REPL manager initialized with: MAX_REPLS={}, MAX_REPL_USES={}, MAX_REPL_MEM={} MB",
+            "REPL manager initialized with: MAX_REPLS={}, MAX_REPL_USES={}, MAX_REPL_MEM={} MB, MIN_HOST_FREE_MEM={} MB",
             max_repls,
             max_repl_uses,
             max_repl_mem,
+            min_host_free_mem,
         )
+
+    def _has_memory_headroom(self) -> bool:
+        """
+        Keep host headroom before creating a new REPL process.
+        Values are in MB.
+        """
+        try:
+            available_mb = int(psutil.virtual_memory().available / 1024 / 1024)
+        except Exception:
+            # If metrics are unavailable, avoid blocking all traffic.
+            return True
+        required_mb = self.max_repl_mem + self.min_host_free_mem
+        return available_mb >= required_mb
 
     def _ensure_lock(self) -> None:
         """Ensure the lock and condition are initialized in an async context."""
@@ -101,6 +118,27 @@ class Manager:
                             return repl
                 total = len(self._free) + len(self._busy)
                 if total < self.max_repls:
+                    if not self._has_memory_headroom():
+                        remaining = deadline - time()
+                        if remaining <= 0:
+                            raise NoAvailableReplError(
+                                "Insufficient host memory to spawn a new REPL"
+                            )
+                        if len(self._busy) == 0:
+                            raise NoAvailableReplError(
+                                "Insufficient host memory to spawn a new REPL"
+                            )
+                        logger.warning(
+                            "Memory headroom unavailable for new REPL, waiting up to {:.2f}s",
+                            remaining,
+                        )
+                        try:
+                            await asyncio.wait_for(self._cond.wait(), timeout=remaining)
+                        except asyncio.TimeoutError:
+                            raise NoAvailableReplError(
+                                "Timed out waiting for host memory headroom"
+                            ) from None
+                        continue
                     break
 
                 if self._free:
