@@ -11,6 +11,8 @@ from .models import (
     ExtendedError,
     Message,
     Pos,
+    ReplResponse,
+    SnippetStatus,
 )
 
 _ERR_RE = re.compile(r"^([^:]+):\n(.*)", re.DOTALL)
@@ -117,10 +119,18 @@ def has_error_response(
     #     r = (True, [feedback["stderr"]]) if return_error_messages else True
     #     return r
 
+    if feedback is None:
+        if return_error_messages:
+            return True, ["missing response"]  # type: ignore[return-value]
+        return True
+
     has_error = False
     error_data_values = []
     sorry_data_values = []
-    if "messages" in feedback:  # type: ignore
+    if "message" in feedback:
+        error_data_values = [str(feedback.get("message", ""))]
+        has_error = True
+    elif "messages" in feedback:  # type: ignore
         error_data_values = [
             message["data"]
             for message in feedback.get("messages", [])  # type: ignore
@@ -128,18 +138,24 @@ def has_error_response(
         ]
         has_error = bool(error_data_values)
 
-        if not accept_sorry:
+    if not accept_sorry:
+        # Sync classification uses `sorries`; keep warning fallback for backward compatibility.
+        if feedback.get("sorries"):  # type: ignore
+            sorry_data_values.append("declaration uses 'sorry'")
+        if "messages" in feedback:  # type: ignore
             warning_data_values = [
                 message["data"]
                 for message in feedback.get("messages", [])  # type: ignore
                 if message.get("severity") == "warning"
             ]
-            sorry_data_values = [
-                warning_data
-                for warning_data in warning_data_values
-                if "declaration uses 'sorry'" in warning_data
-            ]
-            has_error = has_error or bool(sorry_data_values)
+            sorry_data_values.extend(
+                [
+                    warning_data
+                    for warning_data in warning_data_values
+                    if "declaration uses 'sorry'" in warning_data
+                ]
+            )
+        has_error = has_error or bool(sorry_data_values)
 
     if return_error_messages:
         return has_error, error_data_values + sorry_data_values  # type: ignore
@@ -173,23 +189,39 @@ def parse_client_response(response: BackwardResponse) -> ParsedClientResponse:
                 this is used for statement verification.
     """
     error_message = response.get("error", None)
-    json_response: Any = response.get(
-        "response", {}
-    )  # time used to be included in the lean response :/
+    json_response: Any = response.get("response", None)
 
-    error = bool(error_message) or has_error_response(json_response)  # type: ignore
-    is_valid_no_sorry = (not bool(error_message)) and (
-        not has_error_response(json_response, accept_sorry=False)  # type: ignore
-    )
-    is_valid_with_sorry = (not bool(error_message)) and (
-        not has_error_response(json_response, accept_sorry=True)  # type: ignore
-    )
+    # Align backward parsing with the sync API classifier:
+    # ReplResponse.model_validate + ReplResponse.analyze.
+    try:
+        payload: dict[str, Any] = {
+            "id": str(response.get("custom_id", "unknown")),
+            "error": error_message,
+            "response": json_response,
+        }
+        parsed_time = json_response.get("time") if isinstance(json_response, dict) else None
+        if isinstance(parsed_time, (int, float)):
+            payload["time"] = float(parsed_time)
+
+        repl_response = ReplResponse.model_validate(payload)
+        analysis = repl_response.analyze()
+    except Exception:
+        return ParsedClientResponse(
+            has_error=True,
+            is_valid_no_sorry=False,
+            is_valid_with_sorry=False,
+            time=None,
+        )
+
+    is_valid_no_sorry = analysis.status == SnippetStatus.valid
+    is_valid_with_sorry = analysis.status in {SnippetStatus.valid, SnippetStatus.sorry}
+    has_error = not is_valid_with_sorry
 
     return ParsedClientResponse(
-        has_error=error,
+        has_error=has_error,
         is_valid_no_sorry=is_valid_no_sorry,
         is_valid_with_sorry=is_valid_with_sorry,
-        time=json_response.get("time", None) if json_response else None,
+        time=analysis.time,
     )
 
 
