@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     async_max_queue_wait_sec: int = 600
     async_redis_key_prefix: str = "lean_async"
     async_use_in_memory_backend: bool = False
+    async_worker_retries: int = 3
 
     # Host-level memory guard for REPL creation.
     min_host_free_mem: int = 4
@@ -85,6 +86,13 @@ class Settings(BaseSettings):
             n = int(n)
             return n if unit.lower() == "m" else n * 1024
         raise ValueError("min_host_free_mem must be an int or '<number>[M|G]'")
+
+    @field_validator("async_worker_retries")
+    @classmethod
+    def _validate_async_worker_retries(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("async_worker_retries must be >= 1")
+        return v
 
 
 settings = Settings()
