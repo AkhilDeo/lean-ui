@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi import HTTPException
 from kimina_client import CheckRequest, ReplResponse, Snippet
 
 from server.async_jobs import InMemoryAsyncJobs
-from server.worker import process_task
+from server.settings import Settings
+from server.worker import process_task, run_worker
 
 
 @pytest.mark.asyncio
@@ -85,3 +88,54 @@ async def test_worker_retries_transient_http_then_succeeds(
     assert poll.results is not None
     assert poll.results[0]["id"] == "s1"
     assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPatch) -> None:
+    started: set[int] = set()
+
+    class FakeJobs:
+        async def close(self) -> None:
+            return None
+
+    class FakeManager:
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            _ = kwargs
+
+        async def cleanup(self) -> None:
+            return None
+
+    async def fake_create_async_jobs(cfg):  # type: ignore[no-untyped-def]
+        _ = cfg
+        return FakeJobs()
+
+    async def fake_consumer_loop(  # type: ignore[no-untyped-def]
+        *,
+        consumer_id: int,
+        jobs,
+        manager,
+        task_timeout_sec: int,
+        worker_retries: int,
+    ) -> None:
+        _ = jobs, manager, task_timeout_sec, worker_retries
+        started.add(consumer_id)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise
+
+    monkeypatch.setattr("server.worker.create_async_jobs", fake_create_async_jobs)
+    monkeypatch.setattr("server.worker.Manager", FakeManager)
+    monkeypatch.setattr("server.worker._consumer_loop", fake_consumer_loop)
+
+    settings = Settings(_env_file=None)
+    settings.async_enabled = True
+    settings.max_repls = 4
+    settings.async_worker_concurrency = 3
+
+    task = asyncio.create_task(run_worker(settings))
+    await asyncio.sleep(0.05)
+    assert started == {1, 2, 3}
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

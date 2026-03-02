@@ -55,6 +55,7 @@ def create_app(settings: Settings) -> FastAPI:
             init_repls=settings.init_repls,
             min_host_free_mem=settings.min_host_free_mem,
         )
+        app.state.settings = settings
         app.state.manager = manager
 
         if settings.async_enabled:

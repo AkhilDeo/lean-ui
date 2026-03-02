@@ -78,3 +78,38 @@ async def test_backlog_limit_rejected() -> None:
         await jobs.submit(
             CheckRequest(snippets=[Snippet(id="s2", code="#check Int")], timeout=30)
         )
+
+
+@pytest.mark.asyncio
+async def test_in_memory_metrics_reflect_queue_and_running() -> None:
+    jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
+    submit = await jobs.submit(
+        CheckRequest(
+            snippets=[
+                Snippet(id="s1", code="#check Nat"),
+                Snippet(id="s2", code="#check Int"),
+            ],
+            timeout=30,
+        )
+    )
+    _ = submit
+
+    before = await jobs.metrics()
+    assert before.queue_depth == 2
+    assert before.inflight_jobs == 1
+    assert before.running_tasks == 0
+    assert before.enqueue_rate > 0
+
+    task = await jobs.dequeue_task(timeout_sec=1)
+    assert task is not None
+    await jobs.mark_task_started(task)
+
+    during = await jobs.metrics()
+    assert during.queue_depth == 1
+    assert during.running_tasks == 1
+    assert during.inflight_jobs == 1
+    assert during.oldest_queued_age_sec >= 0
+
+    await jobs.mark_task_success(task, ReplResponse(id=task.snippet.id, time=0.1, response={"env": 0}))
+    after = await jobs.metrics()
+    assert after.dequeue_rate > 0
