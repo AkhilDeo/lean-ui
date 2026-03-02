@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     async_redis_key_prefix: str = "lean_async"
     async_use_in_memory_backend: bool = False
     async_worker_retries: int = 3
+    async_worker_concurrency: int | None = None
+    async_metrics_enabled: bool = True
+    async_admission_queue_limit: int = 0
+    async_alert_max_oldest_queued_age_sec: int = 60
 
     # Host-level memory guard for REPL creation.
     min_host_free_mem: int = 4
@@ -92,6 +96,25 @@ class Settings(BaseSettings):
     def _validate_async_worker_retries(cls, v: int) -> int:
         if v < 1:
             raise ValueError("async_worker_retries must be >= 1")
+        return v
+
+    @field_validator("async_worker_concurrency", mode="before")
+    @classmethod
+    def _parse_async_worker_concurrency(cls, v: int | str | None) -> int | None:
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        parsed = int(v)
+        if parsed < 1:
+            raise ValueError("async_worker_concurrency must be >= 1 when provided")
+        return parsed
+
+    @field_validator("async_admission_queue_limit", "async_alert_max_oldest_queued_age_sec")
+    @classmethod
+    def _validate_non_negative_async_limits(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("async queue limits must be >= 0")
         return v
 
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from kimina_client import CheckRequest
 from loguru import logger
 
@@ -10,6 +12,7 @@ from ..async_jobs import (
     AsyncBacklogFullError,
     AsyncJobs,
     AsyncPollResponse,
+    AsyncQueueMetrics,
     AsyncSubmitResponse,
 )
 from ..auth import require_key
@@ -40,20 +43,42 @@ def get_async_jobs(request: Request) -> AsyncJobs:
     include_in_schema=False,
 )
 async def submit_async_check(
-    request: CheckRequest,
+    payload: CheckRequest,
+    request: Request,
     jobs: AsyncJobs = Depends(get_async_jobs),
     _: str = Depends(require_key),
 ) -> AsyncSubmitResponse:
+    settings = getattr(request.app.state, "settings", None)
+    soft_limit = int(getattr(settings, "async_admission_queue_limit", 0) or 0)
+    if soft_limit > 0:
+        metrics = await jobs.metrics()
+        projected_depth = metrics.queue_depth + len(payload.snippets)
+        if projected_depth > soft_limit:
+            logger.bind(endpoint="api.async.submit").warning(
+                "Async submit rejected (admission queue soft limit): queue_depth={} incoming={} projected={} soft_limit={}",
+                metrics.queue_depth,
+                len(payload.snippets),
+                projected_depth,
+                soft_limit,
+            )
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Async queue admission soft limit exceeded "
+                    f"({projected_depth} > {soft_limit})"
+                ),
+            )
+
     logger.bind(endpoint="api.async.submit").info(
         "Async submit received: snippets={} timeout={} debug={} reuse={} infotree={}",
-        len(request.snippets),
-        request.timeout,
-        request.debug,
-        request.reuse,
-        request.infotree,
+        len(payload.snippets),
+        payload.timeout,
+        payload.debug,
+        payload.reuse,
+        payload.infotree,
     )
     try:
-        response = await jobs.submit(request)
+        response = await jobs.submit(payload)
         logger.bind(
             endpoint="api.async.submit",
             job_id=response.job_id,
@@ -85,11 +110,33 @@ async def submit_async_check(
 )
 async def get_async_check_status(
     job_id: str,
+    wait_sec: float = Query(
+        default=0.0,
+        ge=0.0,
+        le=60.0,
+        description=(
+            "Optional long-poll wait duration in seconds. "
+            "When >0, API will poll until terminal state or timeout."
+        ),
+    ),
     jobs: AsyncJobs = Depends(get_async_jobs),
     _: str = Depends(require_key),
 ) -> AsyncPollResponse:
     with logger.contextualize(job_id=job_id, endpoint="api.async.poll"):
         poll = await jobs.poll(job_id)
+        if wait_sec > 0 and poll is not None:
+            deadline = time.perf_counter() + wait_sec
+            while (
+                time.perf_counter() < deadline
+                and str(getattr(poll.status, "value", poll.status)).lower()
+                in {"queued", "running"}
+            ):
+                await asyncio.sleep(0.5)
+                next_poll = await jobs.poll(job_id)
+                if next_poll is None:
+                    poll = None
+                    break
+                poll = next_poll
         if poll is None:
             logger.warning("Async poll miss: job_id={}", job_id)
             raise HTTPException(status_code=404, detail="Async job not found or expired")
@@ -104,3 +151,49 @@ async def get_async_check_status(
             poll.results is not None,
         )
         return poll
+
+
+@router.get(
+    "/async/metrics",
+    response_model=AsyncQueueMetrics,
+    response_model_exclude_none=True,
+)
+@router.get(
+    "/async/metrics/",
+    response_model=AsyncQueueMetrics,
+    response_model_exclude_none=True,
+    include_in_schema=False,
+)
+async def get_async_metrics(
+    request: Request,
+    jobs: AsyncJobs = Depends(get_async_jobs),
+    _: str = Depends(require_key),
+) -> AsyncQueueMetrics:
+    settings = getattr(request.app.state, "settings", None)
+    if settings is not None and not bool(getattr(settings, "async_metrics_enabled", True)):
+        raise HTTPException(status_code=404, detail="Async metrics endpoint is disabled")
+
+    metrics = await jobs.metrics()
+    alert_max_age = int(getattr(settings, "async_alert_max_oldest_queued_age_sec", 60) or 0)
+    if alert_max_age > 0 and metrics.oldest_queued_age_sec > alert_max_age:
+        logger.bind(endpoint="api.async.metrics").warning(
+            "Async queue age alert: oldest_queued_age_sec={:.3f} threshold_sec={}",
+            metrics.oldest_queued_age_sec,
+            alert_max_age,
+        )
+    if metrics.queue_depth > 0 and metrics.running_tasks == 0:
+        logger.bind(endpoint="api.async.metrics").warning(
+            "Async queue progress alert: queue_depth={} running_tasks=0 inflight_jobs={}",
+            metrics.queue_depth,
+            metrics.inflight_jobs,
+        )
+    logger.bind(endpoint="api.async.metrics").info(
+        "Async metrics: queue_depth={} inflight_jobs={} running_tasks={} oldest_queued_age_sec={:.3f} dequeue_rate={:.3f} enqueue_rate={:.3f}",
+        metrics.queue_depth,
+        metrics.inflight_jobs,
+        metrics.running_tasks,
+        metrics.oldest_queued_age_sec,
+        metrics.dequeue_rate,
+        metrics.enqueue_rate,
+    )
+    return metrics

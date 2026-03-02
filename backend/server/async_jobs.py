@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -62,6 +63,15 @@ class AsyncPollResponse(BaseModel):
     error: str | None = None
 
 
+class AsyncQueueMetrics(BaseModel):
+    queue_depth: int
+    inflight_jobs: int
+    running_tasks: int
+    oldest_queued_age_sec: float
+    dequeue_rate: float
+    enqueue_rate: float
+
+
 class AsyncBacklogFullError(Exception):
     pass
 
@@ -83,6 +93,8 @@ class AsyncJobs(Protocol):
         self, task: AsyncTaskPayload, error: str, snippet_id: str
     ) -> None: ...
 
+    async def metrics(self) -> AsyncQueueMetrics: ...
+
     async def close(self) -> None: ...
 
 
@@ -92,6 +104,23 @@ def _now_iso() -> str:
 
 def _expires_iso(ttl_sec: int) -> str:
     return (datetime.now(tz=timezone.utc) + timedelta(seconds=ttl_sec)).isoformat()
+
+
+def _iso_to_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @dataclass
@@ -108,6 +137,27 @@ class RedisAsyncJobs:
 
     def _results_key(self, job_id: str) -> str:
         return f"{self.key_prefix}:job:{job_id}:results"
+
+    def _metrics_key(self) -> str:
+        return f"{self.key_prefix}:queue:{self.queue_name}:metrics"
+
+    async def _record_enqueue_count(self, count: int) -> None:
+        if count <= 0:
+            return
+        key = self._metrics_key()
+        pipe = self.redis.pipeline(transaction=True)
+        pipe.hsetnx(key, "started_at_epoch_s", f"{time.time():.6f}")
+        pipe.hincrby(key, "enqueued_tasks", count)
+        await pipe.execute()
+
+    async def _record_dequeue_count(self, count: int) -> None:
+        if count <= 0:
+            return
+        key = self._metrics_key()
+        pipe = self.redis.pipeline(transaction=True)
+        pipe.hsetnx(key, "started_at_epoch_s", f"{time.time():.6f}")
+        pipe.hincrby(key, "dequeued_tasks", count)
+        await pipe.execute()
 
     async def submit(self, request: CheckRequest) -> AsyncSubmitResponse:
         n = len(request.snippets)
@@ -182,6 +232,7 @@ class RedisAsyncJobs:
 
         try:
             await self.queue.enqueue_many(tasks)
+            await self._record_enqueue_count(len(tasks))
             job_logger.info(
                 "Async job enqueued (redis): job_id={} tasks={} queue={}",
                 job_id,
@@ -268,7 +319,10 @@ class RedisAsyncJobs:
         )
 
     async def dequeue_task(self, timeout_sec: int = 1) -> AsyncTaskPayload | None:
-        return await self.queue.dequeue(timeout_sec=timeout_sec)
+        task = await self.queue.dequeue(timeout_sec=timeout_sec)
+        if task is not None:
+            await self._record_dequeue_count(1)
+        return task
 
     async def mark_task_started(self, task: AsyncTaskPayload) -> None:
         task_logger = logger.bind(
@@ -391,6 +445,81 @@ class RedisAsyncJobs:
             is_failure=True,
         )
 
+    async def _oldest_queue_age_sec(self) -> float:
+        first = await self.redis.lindex(self.queue_name, 0)
+        if first is None:
+            return 0.0
+        payload = first.decode("utf-8") if isinstance(first, bytes) else str(first)
+        try:
+            task = AsyncTaskPayload.model_validate_json(payload)
+        except Exception:
+            return 0.0
+        enqueued_at = _iso_to_datetime(task.enqueued_at)
+        if enqueued_at is None:
+            return 0.0
+        return max((datetime.now(tz=timezone.utc) - enqueued_at).total_seconds(), 0.0)
+
+    async def _all_meta(self) -> list[dict[str, str]]:
+        metas: list[dict[str, str]] = []
+        cursor: int | str = 0
+        pattern = f"{self.key_prefix}:job:*:meta"
+        while True:
+            cursor, keys = await self.redis.scan(cursor=cursor, match=pattern, count=200)
+            for key in keys:
+                raw = await self.redis.hgetall(key)
+                if not raw:
+                    continue
+                meta: dict[str, str] = {}
+                for k, v in raw.items():
+                    key_s = k.decode("utf-8") if isinstance(k, bytes) else str(k)
+                    val_s = v.decode("utf-8") if isinstance(v, bytes) else str(v)
+                    meta[key_s] = val_s
+                metas.append(meta)
+            if cursor in {0, "0"}:
+                break
+        return metas
+
+    async def metrics(self) -> AsyncQueueMetrics:
+        queue_depth = await self.queue.length()
+        oldest_queued_age_sec = await self._oldest_queue_age_sec()
+        metas = await self._all_meta()
+
+        inflight_jobs = 0
+        running_tasks = 0
+        for meta in metas:
+            status = meta.get("status", AsyncJobStatus.queued.value)
+            total = int(meta.get("total", 0))
+            done = int(meta.get("done", 0))
+            failed = int(meta.get("failed", 0))
+            running = int(meta.get("running", 0))
+            running_tasks += max(running, 0)
+            is_terminal = status in {
+                AsyncJobStatus.completed.value,
+                AsyncJobStatus.failed.value,
+                AsyncJobStatus.expired.value,
+            }
+            if not is_terminal and (done + failed) < total:
+                inflight_jobs += 1
+
+        metrics_raw = await self.redis.hgetall(self._metrics_key())
+        metrics_map: dict[str, str] = {}
+        for k, v in metrics_raw.items():
+            key_s = k.decode("utf-8") if isinstance(k, bytes) else str(k)
+            val_s = v.decode("utf-8") if isinstance(v, bytes) else str(v)
+            metrics_map[key_s] = val_s
+        started_epoch = float(metrics_map.get("started_at_epoch_s", f"{time.time():.6f}"))
+        enqueued = int(metrics_map.get("enqueued_tasks", 0))
+        dequeued = int(metrics_map.get("dequeued_tasks", 0))
+        elapsed = max(time.time() - started_epoch, 1e-6)
+        return AsyncQueueMetrics(
+            queue_depth=queue_depth,
+            inflight_jobs=inflight_jobs,
+            running_tasks=running_tasks,
+            oldest_queued_age_sec=oldest_queued_age_sec,
+            dequeue_rate=dequeued / elapsed,
+            enqueue_rate=enqueued / elapsed,
+        )
+
     async def close(self) -> None:
         logger.info("Closing async jobs backend (redis): queue={}", self.queue_name)
         await self.queue.close()
@@ -404,6 +533,9 @@ class InMemoryAsyncJobs:
         self._meta: dict[str, dict[str, Any]] = {}
         self._results: dict[str, list[dict[str, Any] | None]] = {}
         self._lock = asyncio.Lock()
+        self._created_at_monotonic = time.monotonic()
+        self._enqueue_count = 0
+        self._dequeue_count = 0
 
     async def submit(self, request: CheckRequest) -> AsyncSubmitResponse:
         n = len(request.snippets)
@@ -458,6 +590,7 @@ class InMemoryAsyncJobs:
             self._results[job_id] = [None] * n
 
         await self.queue.enqueue_many(tasks)
+        self._enqueue_count += len(tasks)
         job_logger.info(
             "Async job enqueued (in-memory): job_id={} tasks={} ttl_sec={}",
             job_id,
@@ -511,7 +644,10 @@ class InMemoryAsyncJobs:
             )
 
     async def dequeue_task(self, timeout_sec: int = 1) -> AsyncTaskPayload | None:
-        return await self.queue.dequeue(timeout_sec=timeout_sec)
+        task = await self.queue.dequeue(timeout_sec=timeout_sec)
+        if task is not None:
+            self._dequeue_count += 1
+        return task
 
     async def mark_task_started(self, task: AsyncTaskPayload) -> None:
         task_logger = logger.bind(
@@ -634,6 +770,57 @@ class InMemoryAsyncJobs:
     async def close(self) -> None:
         logger.info("Closing async jobs backend (in-memory)")
         await self.queue.close()
+
+    async def metrics(self) -> AsyncQueueMetrics:
+        queue_depth = await self.queue.length()
+        oldest_queued_age_sec = 0.0
+
+        # Accessing the queue's head is required for queue-age observability.
+        queue_data = list(getattr(self.queue._q, "_queue", []))
+        if queue_data:
+            first = queue_data[0]
+            try:
+                task = AsyncTaskPayload.model_validate_json(first)
+                enqueued_at = _iso_to_datetime(task.enqueued_at)
+                if enqueued_at is not None:
+                    oldest_queued_age_sec = max(
+                        (datetime.now(tz=timezone.utc) - enqueued_at).total_seconds(), 0.0
+                    )
+            except Exception:
+                oldest_queued_age_sec = 0.0
+
+        inflight_jobs = 0
+        running_tasks = 0
+        async with self._lock:
+            for meta in self._meta.values():
+                running = int(meta.get("running", 0))
+                total = int(meta.get("total", 0))
+                done = int(meta.get("done", 0))
+                failed = int(meta.get("failed", 0))
+                status_obj = meta.get("status", AsyncJobStatus.queued)
+                status = (
+                    status_obj.value
+                    if isinstance(status_obj, AsyncJobStatus)
+                    else str(status_obj)
+                )
+                running_tasks += max(running, 0)
+                is_terminal = status in {
+                    AsyncJobStatus.completed.value,
+                    AsyncJobStatus.failed.value,
+                    AsyncJobStatus.expired.value,
+                }
+                if not is_terminal and (done + failed) < total:
+                    inflight_jobs += 1
+
+        elapsed = max(time.monotonic() - self._created_at_monotonic, 1e-6)
+        return AsyncQueueMetrics(
+            queue_depth=queue_depth,
+            inflight_jobs=inflight_jobs,
+            running_tasks=running_tasks,
+            oldest_queued_age_sec=oldest_queued_age_sec,
+            dequeue_rate=self._dequeue_count / elapsed,
+            enqueue_rate=self._enqueue_count / elapsed,
+        )
 
 
 async def create_async_jobs(settings: Settings) -> AsyncJobs:
