@@ -16,6 +16,9 @@ from ..async_jobs import (
     AsyncSubmitResponse,
 )
 from ..auth import require_key
+from ..request_policy import normalize_check_request
+from ..settings import Settings
+from .check import get_runtime_settings
 
 router = APIRouter()
 
@@ -46,18 +49,20 @@ async def submit_async_check(
     payload: CheckRequest,
     request: Request,
     jobs: AsyncJobs = Depends(get_async_jobs),
+    runtime_settings: Settings = Depends(get_runtime_settings),
     _: str = Depends(require_key),
 ) -> AsyncSubmitResponse:
-    settings = getattr(request.app.state, "settings", None)
+    normalized_payload = normalize_check_request(payload, runtime_settings)
+    settings = getattr(request.app.state, "settings", runtime_settings)
     soft_limit = int(getattr(settings, "async_admission_queue_limit", 0) or 0)
     if soft_limit > 0:
         metrics = await jobs.metrics()
-        projected_depth = metrics.queue_depth + len(payload.snippets)
+        projected_depth = metrics.queue_depth + len(normalized_payload.snippets)
         if projected_depth > soft_limit:
             logger.bind(endpoint="api.async.submit").warning(
                 "Async submit rejected (admission queue soft limit): queue_depth={} incoming={} projected={} soft_limit={}",
                 metrics.queue_depth,
-                len(payload.snippets),
+                len(normalized_payload.snippets),
                 projected_depth,
                 soft_limit,
             )
@@ -71,14 +76,14 @@ async def submit_async_check(
 
     logger.bind(endpoint="api.async.submit").info(
         "Async submit received: snippets={} timeout={} debug={} reuse={} infotree={}",
-        len(payload.snippets),
-        payload.timeout,
-        payload.debug,
-        payload.reuse,
-        payload.infotree,
+        len(normalized_payload.snippets),
+        normalized_payload.timeout,
+        normalized_payload.debug,
+        normalized_payload.reuse,
+        normalized_payload.infotree,
     )
     try:
-        response = await jobs.submit(payload)
+        response = await jobs.submit(normalized_payload)
         logger.bind(
             endpoint="api.async.submit",
             job_id=response.job_id,

@@ -12,7 +12,9 @@ from ..db import db
 from ..errors import NoAvailableReplError
 from ..manager import Manager
 from ..prisma_client import prisma
+from ..request_policy import normalize_check_request
 from ..repl import Repl
+from ..settings import Settings, settings as default_settings
 from ..split import split_snippet
 
 router = APIRouter()
@@ -21,6 +23,13 @@ router = APIRouter()
 def get_manager(request: Request) -> Manager:
     """Dependency: retrieve the REPL manager from app state"""
     return cast(Manager, request.app.state.manager)
+
+
+def get_runtime_settings(request: Request) -> Settings:
+    cfg = getattr(request.app.state, "settings", None)
+    if cfg is None:
+        return default_settings
+    return cast(Settings, cfg)
 
 
 def _shift_line(pos: Pos | None, offset: int) -> None:
@@ -211,16 +220,19 @@ async def check(
     request: CheckRequest,
     raw_request: Request,
     manager: Manager = Depends(get_manager),
+    runtime_settings: Settings = Depends(get_runtime_settings),
     _: str = Depends(require_key),
 ) -> CheckResponse:
+    normalized_request = normalize_check_request(request, runtime_settings)
+
     task = asyncio.create_task(
         run_checks(
-            request.snippets,
-            float(request.timeout),
-            request.debug,
+            normalized_request.snippets,
+            float(normalized_request.timeout),
+            normalized_request.debug,
             manager,
-            request.reuse,
-            request.infotree,
+            normalized_request.reuse,
+            normalized_request.infotree,
         )
     )
 

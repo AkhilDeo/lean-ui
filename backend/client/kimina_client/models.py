@@ -71,6 +71,8 @@ class VerifyRequestBody(BaseModel):
     infotree_type: Infotree | None = None
     disable_cache: bool = False
 
+    model_config = ConfigDict(extra="forbid")
+
 
 class Snippet(BaseModel):
     id: str = Field(..., description="Identifier to trace the snippet")
@@ -228,11 +230,14 @@ class BaseRequest(BaseModel):
         description="Level of detail for the info tree.",
     )
 
+    model_config = ConfigDict(extra="forbid")
+
 
 class ReplRequest(BaseRequest):
     snippet: Snippet = Field(description="Single snippet to validate")
 
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "example": {
                 "snippet": {
@@ -320,6 +325,7 @@ class CheckRequest(BaseRequest):
         return self
 
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "example": {
                 "snippets": [

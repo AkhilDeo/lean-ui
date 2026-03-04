@@ -4,7 +4,9 @@ from kimina_client.models import extend
 
 from ..auth import require_key
 from ..manager import Manager
-from .check import get_manager, run_checks
+from ..request_policy import normalize_request_policy
+from ..settings import Settings
+from .check import get_manager, get_runtime_settings, run_checks
 
 router = APIRouter()
 
@@ -18,6 +20,7 @@ router = APIRouter()
 async def one_pass_verify_batch(
     body: VerifyRequestBody,
     manager: Manager = Depends(get_manager),
+    runtime_settings: Settings = Depends(get_runtime_settings),
     _: str = Depends(require_key),
 ) -> VerifyResponse:
     """Backward compatible endpoint: accepts both 'proof' / 'code' fields."""
@@ -27,9 +30,15 @@ async def one_pass_verify_batch(
         Snippet(id=str(code.custom_id), code=code.get_proof_content()) for code in codes
     ]
 
-    timeout = body.timeout
-    debug = False
-    reuse = not body.disable_cache
+    policy = normalize_request_policy(
+        timeout=float(body.timeout),
+        debug=False,
+        reuse=not body.disable_cache,
+        settings=runtime_settings,
+    )
+    timeout = policy.timeout
+    debug = policy.debug
+    reuse = policy.reuse
     infotree = body.infotree_type
 
     check_responses = await run_checks(

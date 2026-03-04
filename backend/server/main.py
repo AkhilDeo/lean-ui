@@ -38,6 +38,10 @@ def create_app(settings: Settings) -> FastAPI:
             settings.port,
             settings.lean_version,
         )
+        if settings.environment == Environment.prod and settings.api_key is None:
+            raise RuntimeError(
+                "LEAN_SERVER_API_KEY must be configured when LEAN_SERVER_ENVIRONMENT=prod"
+            )
         if settings.database_url:
             logger.info(f"Database URL = '{settings.database_url}'")
             try:
@@ -57,12 +61,14 @@ def create_app(settings: Settings) -> FastAPI:
         )
         app.state.settings = settings
         app.state.manager = manager
+        app.state.settings = settings
 
         if settings.async_enabled:
             app.state.async_jobs = await create_async_jobs(settings)
             logger.info(
-                "Async queue API enabled: queue='{}'",
+                "Async queue API enabled: queue='{}' metrics_enabled={}",
                 settings.async_queue_name,
+                settings.async_metrics_enabled,
             )
 
         async def _init_repls_background() -> None:

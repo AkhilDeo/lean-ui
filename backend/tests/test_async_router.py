@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+
 import pytest
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
@@ -17,6 +18,7 @@ def _build_app(
 ):
     settings = Settings(_env_file=None)
     settings.environment = Environment.prod
+    settings.api_key = "test-key"
     settings.database_url = None
     settings.async_enabled = True
     settings.async_use_in_memory_backend = True
@@ -35,7 +37,9 @@ async def test_async_submit_poll_lifecycle() -> None:
 
     async with LifespanManager(app):
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://testserver/api"
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload = CheckRequest(
                 snippets=[Snippet(id="one", code="#check Nat")], timeout=30
@@ -71,7 +75,9 @@ async def test_async_submit_batch_final_results_ordered() -> None:
 
     async with LifespanManager(app):
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://testserver/api"
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload = CheckRequest(
                 snippets=[
@@ -109,7 +115,9 @@ async def test_async_backlog_limit_returns_429() -> None:
 
     async with LifespanManager(app):
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://testserver/api"
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload1 = CheckRequest(
                 snippets=[Snippet(id="one", code="#check Nat")], timeout=30
@@ -129,10 +137,39 @@ async def test_async_poll_unknown_job_returns_404() -> None:
 
     async with LifespanManager(app):
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://testserver/api"
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
         ) as client:
             resp = await client.get("/async/check/not-found")
             assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_async_submit_policy_normalizes_timeout_debug_and_reuse() -> None:
+    app = _build_app()
+
+    async with LifespanManager(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
+        ) as client:
+            payload = CheckRequest(
+                snippets=[Snippet(id="one", code="#check Nat")],
+                timeout=999,
+                debug=True,
+                reuse=False,
+            ).model_dump()
+            submit = await client.post("/async/check", json=payload)
+            assert submit.status_code == 200
+
+            jobs = app.state.async_jobs
+            task = await jobs.dequeue_task(timeout_sec=1)
+            assert task is not None
+            assert task.timeout == float(app.state.settings.request_timeout_max_sec)
+            assert task.debug is False
+            assert task.reuse is True
 
 
 @pytest.mark.asyncio
@@ -141,7 +178,9 @@ async def test_async_metrics_endpoint_returns_queue_health() -> None:
 
     async with LifespanManager(app):
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://testserver/api"
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
         ) as client:
             metrics = await client.get("/async/metrics")
             assert metrics.status_code == 200
@@ -157,7 +196,9 @@ async def test_async_metrics_endpoint_disabled_returns_404() -> None:
 
     async with LifespanManager(app):
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://testserver/api"
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
         ) as client:
             metrics = await client.get("/async/metrics")
             assert metrics.status_code == 404
@@ -169,7 +210,9 @@ async def test_async_admission_soft_limit_returns_429() -> None:
 
     async with LifespanManager(app):
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://testserver/api"
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload1 = CheckRequest(
                 snippets=[Snippet(id="one", code="#check Nat")], timeout=30
@@ -189,7 +232,9 @@ async def test_async_poll_wait_sec_long_polling() -> None:
 
     async with LifespanManager(app):
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://testserver/api"
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload = CheckRequest(
                 snippets=[Snippet(id="one", code="#check Nat")], timeout=30

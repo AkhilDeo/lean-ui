@@ -1,7 +1,7 @@
-from fastapi import HTTPException, Security
+from fastapi import HTTPException, Request, Security
 from fastapi.security.api_key import APIKeyHeader
 
-from .settings import settings
+from .settings import Environment, settings
 
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 
@@ -13,8 +13,16 @@ api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 #         await db.client.api_key.create(data={"key": API_KEY})
 
 
-async def require_key(auth: str = Security(api_key_header)) -> str | None:
-    if settings.api_key is None:
+async def require_key(request: Request, auth: str = Security(api_key_header)) -> str | None:
+    cfg = getattr(request.app.state, "settings", settings)
+
+    if cfg.api_key is None and cfg.environment == Environment.prod:
+        raise HTTPException(
+            status_code=503,
+            detail="API key is not configured for production",
+        )
+
+    if cfg.api_key is None:
         return None
 
     if not auth:
@@ -22,6 +30,6 @@ async def require_key(auth: str = Security(api_key_header)) -> str | None:
 
     token = auth.removeprefix("Bearer ").strip()
     # found = await db.client.api_key.find_unique(where={"key": token})
-    if not token == settings.api_key:
+    if token != cfg.api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return token

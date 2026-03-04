@@ -132,13 +132,15 @@ async def _consumer_loop(
 ) -> None:
     while True:
         try:
-            await process_task(
+            did_work = await process_task(
                 jobs=jobs,
                 manager=manager,
                 task_timeout_sec=task_timeout_sec,
                 worker_retries=worker_retries,
                 consumer_id=consumer_id,
             )
+            if not did_work:
+                await asyncio.sleep(0.05)
         except asyncio.CancelledError:
             logger.info("Worker consumer cancelled: consumer_id={}", consumer_id)
             raise
@@ -168,10 +170,11 @@ async def run_worker(settings: Settings | None = None) -> None:
     worker_concurrency = max(1, min(configured_concurrency, cfg.max_repls))
 
     logger.info(
-        "Async worker started. queue={} max_repls={} worker_concurrency={} max_repl_mem_mb={} min_host_free_mem_mb={} max_repl_uses={} worker_retries={}",
+        "Async worker started. queue={} max_repls={} worker_concurrency={} configured_worker_concurrency={} max_repl_mem_mb={} min_host_free_mem_mb={} max_repl_uses={} worker_retries={}",
         cfg.async_queue_name,
         cfg.max_repls,
         worker_concurrency,
+        cfg.async_worker_concurrency,
         cfg.max_repl_mem,
         cfg.min_host_free_mem,
         cfg.max_repl_uses,
