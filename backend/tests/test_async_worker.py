@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi import HTTPException
 from kimina_client import CheckRequest, ReplResponse, Snippet
 
 from server.async_jobs import InMemoryAsyncJobs
-from server.worker import process_task
+from server.settings import Settings
+from server.worker import process_task, run_worker
 
 
 @pytest.mark.asyncio
@@ -85,3 +88,50 @@ async def test_worker_retries_transient_http_then_succeeds(
     assert poll.results is not None
     assert poll.results[0]["id"] == "s1"
     assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_worker_uses_configured_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inflight = 0
+    max_inflight = 0
+    reached_target = asyncio.Event()
+
+    class DummyJobs:
+        async def close(self) -> None:
+            return None
+
+    class DummyManager:
+        async def cleanup(self) -> None:
+            return None
+
+    async def fake_create_async_jobs(_cfg: Settings) -> DummyJobs:
+        return DummyJobs()
+
+    async def fake_process_task(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal inflight, max_inflight
+        inflight += 1
+        max_inflight = max(max_inflight, inflight)
+        if max_inflight >= 3:
+            reached_target.set()
+        await asyncio.sleep(0.05)
+        inflight -= 1
+        return True
+
+    monkeypatch.setattr("server.worker.create_async_jobs", fake_create_async_jobs)
+    monkeypatch.setattr("server.worker.Manager", lambda **kwargs: DummyManager())
+    monkeypatch.setattr("server.worker.process_task", fake_process_task)
+
+    cfg = Settings(_env_file=None)
+    cfg.async_enabled = True
+    cfg.max_repls = 5
+    cfg.async_worker_concurrency = 3
+
+    task = asyncio.create_task(run_worker(cfg))
+    await asyncio.wait_for(reached_target.wait(), timeout=1.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert max_inflight >= 3

@@ -13,6 +13,9 @@ from ..async_jobs import (
     AsyncSubmitResponse,
 )
 from ..auth import require_key
+from ..request_policy import normalize_check_request
+from ..settings import Settings
+from .check import get_runtime_settings
 
 router = APIRouter()
 
@@ -40,10 +43,12 @@ def get_async_jobs(request: Request) -> AsyncJobs:
     include_in_schema=False,
 )
 async def submit_async_check(
-    request: CheckRequest,
+    payload: CheckRequest,
     jobs: AsyncJobs = Depends(get_async_jobs),
+    runtime_settings: Settings = Depends(get_runtime_settings),
     _: str = Depends(require_key),
 ) -> AsyncSubmitResponse:
+    request = normalize_check_request(payload, runtime_settings)
     logger.bind(endpoint="api.async.submit").info(
         "Async submit received: snippets={} timeout={} debug={} reuse={} infotree={}",
         len(request.snippets),

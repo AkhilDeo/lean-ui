@@ -8,12 +8,15 @@ from server.settings import Environment, Settings
 def _client() -> TestClient:
     settings = Settings(_env_file=None)
     settings.environment = Environment.prod
+    settings.api_key = "test-key"
     settings.database_url = None
     settings.init_repls = {}
     settings.async_enabled = True
     settings.async_use_in_memory_backend = True
     app = create_app(settings)
-    return TestClient(app, base_url="http://testserver")
+    client = TestClient(app, base_url="http://testserver")
+    client.headers.update({"Authorization": "Bearer test-key"})
+    return client
 
 
 def test_sync_routes_still_present() -> None:

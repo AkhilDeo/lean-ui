@@ -48,7 +48,15 @@ class Settings(BaseSettings):
     async_max_queue_wait_sec: int = 600
     async_redis_key_prefix: str = "lean_async"
     async_use_in_memory_backend: bool = False
+    async_metrics_enabled: bool = False
+    async_worker_concurrency: int = 1
     async_worker_retries: int = 3
+
+    # Request policy hardening
+    request_timeout_max_sec: int = 60
+    allow_client_debug: bool = False
+    allow_client_reuse_override: bool = False
+    allow_client_timeout_override: bool = True
 
     # Host-level memory guard for REPL creation.
     min_host_free_mem: int = 4
@@ -92,6 +100,20 @@ class Settings(BaseSettings):
     def _validate_async_worker_retries(cls, v: int) -> int:
         if v < 1:
             raise ValueError("async_worker_retries must be >= 1")
+        return v
+
+    @field_validator("async_worker_concurrency")
+    @classmethod
+    def _validate_async_worker_concurrency(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("async_worker_concurrency must be >= 1")
+        return v
+
+    @field_validator("request_timeout_max_sec")
+    @classmethod
+    def _validate_request_timeout_max_sec(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("request_timeout_max_sec must be >= 0")
         return v
 
 

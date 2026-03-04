@@ -123,25 +123,42 @@ async def run_worker(settings: Settings | None = None) -> None:
         init_repls=cfg.init_repls,
         min_host_free_mem=cfg.min_host_free_mem,
     )
+    effective_worker_concurrency = min(cfg.async_worker_concurrency, cfg.max_repls)
 
     logger.info(
-        "Async worker started. queue={} max_repls={} max_repl_mem_mb={} min_host_free_mem_mb={} max_repl_uses={}",
+        "Async worker started. queue={} max_repls={} max_repl_mem_mb={} min_host_free_mem_mb={} max_repl_uses={} worker_concurrency={} effective_worker_concurrency={}",
         cfg.async_queue_name,
         cfg.max_repls,
         cfg.max_repl_mem,
         cfg.min_host_free_mem,
         cfg.max_repl_uses,
+        cfg.async_worker_concurrency,
+        effective_worker_concurrency,
     )
-    try:
+    consumers: list[asyncio.Task[None]] = []
+
+    async def _consume_loop(consumer_id: int) -> None:
+        logger.info("Worker consumer {} started", consumer_id)
         while True:
-            await process_task(
+            did_work = await process_task(
                 jobs=jobs,
                 manager=manager,
                 task_timeout_sec=3,
                 worker_retries=cfg.async_worker_retries,
             )
+            if not did_work:
+                await asyncio.sleep(0.05)
+
+    for i in range(effective_worker_concurrency):
+        consumers.append(asyncio.create_task(_consume_loop(i + 1)))
+
+    try:
+        await asyncio.gather(*consumers)
     except asyncio.CancelledError:
         logger.info("Worker cancelled")
+        for task in consumers:
+            task.cancel()
+        await asyncio.gather(*consumers, return_exceptions=True)
         raise
     finally:
         await manager.cleanup()

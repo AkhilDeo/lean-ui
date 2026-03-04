@@ -18,6 +18,7 @@ def client(request: FixtureRequest) -> TestClient:
         "init_repls": {},
         "database_url": None,
         "environment": Environment.prod,
+        "api_key": "test-key",
     }
 
     overrides = {**defaults, **getattr(request, "param", {})}
@@ -28,6 +29,7 @@ def client(request: FixtureRequest) -> TestClient:
     app = create_app(s)
 
     with TestClient(app, base_url="http://testserver/api") as client:
+        client.headers.update({"Authorization": "Bearer test-key"})
         yield client
 
 
@@ -39,6 +41,7 @@ def client(request: FixtureRequest) -> TestClient:
             "init_repls": {},
             "database_url": None,
             "environment": Environment.prod,
+            "api_key": "test-key",
         },
     ]
 )
@@ -50,6 +53,7 @@ def root_client(request: FixtureRequest) -> TestClient:
     app = create_app(s)
 
     with TestClient(app, base_url="http://testserver") as root_client:
+        root_client.headers.update({"Authorization": "Bearer test-key"})
         yield root_client
 
 
