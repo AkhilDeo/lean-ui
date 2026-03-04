@@ -1,17 +1,34 @@
-# Contributor Guide
+# AGENTS.md
 
-## Dev Environment Tips
-- Start by copying the environment variables with `cp .env.template .env`
-- Use uv for most commands (add a dependency, run python) to ensure you have the proper dependencies: https://docs.astral.sh/uv/
-- Use `uv run pre-commit install` to have pre-commits run automatically (pyright + mypy)
-- Install the pre-push hook `uv run pre-commit install --hook-type pre-push` to automatically run tests before pushing
-- Run `bash setup.sh` to install the elan suite with Lean 4 and sync of the `repl` and `mathlib4` repositories
+## Workflow Orchestration
+- Enter plan mode for any non-trivial task (3+ steps or architectural decisions).
+- If execution diverges, stop and re-plan before continuing.
+- Use subagents and parallel analysis where available to keep context focused.
+- Keep one clear objective per worker or parallel branch.
+- Use plan mode for verification design, not just implementation.
 
-## Testing Instructions
-- Make sure you have a `.env` file where BASE points to `/workspace/fast-repl` as that's where you will iterate
-- Run `uv run pre-commit run --all-files` to check typing
-- Validate your changes by running tests: `uv run pytest`
-- Add or update tests for the code you change, even if nobody asked.
+## Task Management
+- Maintain `tasks/todo.md` with checkable plan items for active work.
+- Maintain `tasks/lessons.md` and add an entry after every user correction.
+- Required lesson entry schema: Date, Correction received, Root cause, New preventive rule, Where applied.
+- Review relevant lessons before starting non-trivial work.
+- Track progress continuously and record verification evidence before closing tasks.
 
-## PR instructions
-Title format: [<project_name>] <Title>
+## Core Principles
+- Never mark work done without proof (tests, checks, logs, or explicit validation).
+- Prefer the simplest solution that solves the root cause with minimal surface area.
+- For non-trivial changes, pause and choose the most elegant maintainable design.
+- Own bug reports end-to-end: reproduce, diagnose, fix, and verify without hand-holding.
+- Avoid temporary compatibility layers unless explicitly required.
+
+## Repo Appendix
+- Repo context: Lean UI monorepo; this file governs backend contribution workflow.
+- Setup and commands:
+  - `cp .env.template .env`
+  - `bash setup.sh`
+  - `uv run pre-commit install`
+  - `uv run pre-commit install --hook-type pre-push`
+- Required verification:
+  - `uv run pre-commit run --all-files`
+  - `uv run pytest`
+- PR title format: `[<project_name>] <Title>`.

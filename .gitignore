@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+tasks/
+backend/tmp_stress_parity_report.json
+backend/tmp_sync_async_parity_report.json
