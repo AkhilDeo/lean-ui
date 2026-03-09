@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse, ORJSONResponse
 from loguru import logger
 from pydantic.json_schema import GenerateJsonSchema
 
@@ -28,6 +29,13 @@ setattr(GenerateJsonSchema, "sort", no_sort)
 
 
 def create_app(settings: Settings) -> FastAPI:
+    try:
+        import orjson  # noqa: F401
+
+        default_response_class: type[Response] = ORJSONResponse
+    except Exception:
+        default_response_class = JSONResponse
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info(
@@ -62,6 +70,10 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.settings = settings
         app.state.manager = manager
         app.state.settings = settings
+        app.state.request_logging_enabled = (
+            settings.environment != Environment.prod
+            or settings.log_level.strip().upper() == "DEBUG"
+        )
 
         if settings.async_enabled:
             app.state.async_jobs = await create_async_jobs(settings)
@@ -113,6 +125,7 @@ def create_app(settings: Settings) -> FastAPI:
         title="Kimina Lean Server API",
         description="Check Lean 4 snippets at scale via REPL",
         version=__version__,
+        default_response_class=default_response_class,
         openapi_url="/api/openapi.json",
         docs_url="/docs",
         redoc_url="/redoc",
@@ -149,6 +162,8 @@ app = create_app(settings)
 async def log_requests(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
+    if not bool(getattr(request.app.state, "request_logging_enabled", True)):
+        return await call_next(request)
     logger.bind(path=request.url.path, method=request.method).debug("-> request")
     response = await call_next(request)
     logger.bind(status_code=response.status_code).debug("<- response")
