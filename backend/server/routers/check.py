@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import cast
+from typing import TypeVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from kimina_client import CheckRequest, Infotree, ReplResponse, Snippet
@@ -18,6 +18,7 @@ from ..settings import Settings, settings as default_settings
 from ..split import split_snippet
 
 router = APIRouter()
+TaskResultT = TypeVar("TaskResultT")
 
 
 def get_manager(request: Request) -> Manager:
@@ -66,6 +67,33 @@ def _apply_header_offset(response: ReplResponse, offset: int) -> None:
         _shift_line(pos, offset)
         end_pos = sorry.get("endPos")
         _shift_line(end_pos, offset)
+
+
+def _log_body_response(repl: Repl, snippet_id: str, response: ReplResponse) -> None:
+    logger.opt(lazy=True).debug(
+        "[{}] Response for [bold magenta]{}[/bold magenta] body ->\n{}",
+        repl.uuid.hex[:8],
+        snippet_id,
+        lambda: json.dumps(response.model_dump(exclude_none=True), indent=2),
+    )
+
+
+async def wait_for_task_or_disconnect(
+    task: asyncio.Task[TaskResultT],
+    raw_request: Request,
+    *,
+    disconnect_poll_interval_sec: float = 0.1,
+) -> TaskResultT:
+    while True:
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task),
+                timeout=disconnect_poll_interval_sec,
+            )
+        except asyncio.TimeoutError:
+            if await raw_request.is_disconnected():
+                task.cancel()
+                raise HTTPException(499, "Client disconnected") from None
 
 
 async def run_checks(
@@ -155,24 +183,14 @@ async def run_checks(
                         "repl_uuid": uuid_hex,
                     },
                 )
-                logger.info(
-                    "[{}] Response for [bold magenta]{}[/bold magenta] body →\n{}",
-                    repl.uuid.hex[:8],
-                    snippet.id,
-                    json.dumps(resp.model_dump(exclude_none=True), indent=2),
-                )
+                _log_body_response(repl, snippet.id, resp)
                 return resp
             except Exception as e:
                 logger.exception("Snippet execution failed")
                 await manager.destroy_repl(repl)
                 raise HTTPException(500, str(e)) from e
             else:
-                logger.info(
-                    "[{}] Response for [bold magenta]{}[/bold magenta] body →\n{}",
-                    repl.uuid.hex[:8],
-                    snippet.id,
-                    json.dumps(resp.model_dump(exclude_none=True), indent=2),
-                )
+                _log_body_response(repl, snippet.id, resp)
                 await manager.release_repl(repl)
                 # TODO: Try catch everything DB related
                 if db.connected:
@@ -235,12 +253,5 @@ async def check(
             normalized_request.infotree,
         )
     )
-
-    while not task.done():
-        if await raw_request.is_disconnected():
-            task.cancel()
-            raise HTTPException(499, "Client disconnected")
-        await asyncio.sleep(0.1)
-
-    results = await task
+    results = await wait_for_task_or_disconnect(task, raw_request)
     return CheckResponse(results=results)

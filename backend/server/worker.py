@@ -35,7 +35,7 @@ async def process_task(
         consumer_id=consumer_id,
     ):
         started_at = time.perf_counter()
-        logger.info(
+        logger.debug(
             "Worker dequeued async task: consumer_id={} job_id={} task_id={} index={} snippet_id={} timeout={} debug={} reuse={}",
             consumer_id,
             task.job_id,
@@ -58,7 +58,7 @@ async def process_task(
                     infotree=task.infotree,
                 )
                 await jobs.mark_task_success(task, responses[0])
-                logger.info(
+                logger.debug(
                     "Worker completed async task: consumer_id={} job_id={} task_id={} index={} snippet_id={} attempt={} elapsed_sec={:.3f}",
                     consumer_id,
                     task.job_id,
@@ -142,7 +142,7 @@ async def _consumer_loop(
             if not did_work:
                 await asyncio.sleep(0.05)
         except asyncio.CancelledError:
-            logger.info("Worker consumer cancelled: consumer_id={}", consumer_id)
+            logger.debug("Worker consumer cancelled: consumer_id={}", consumer_id)
             raise
         except Exception as exc:
             logger.exception(

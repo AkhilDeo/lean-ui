@@ -101,7 +101,7 @@ class Manager:
         repl_to_destroy: Repl | None = None
         while True:
             async with self._cond:
-                logger.info(
+                logger.debug(
                     f"# Free = {len(self._free)} | # Busy = {len(self._busy)} | # Max = {self.max_repls}"
                 )
                 if reuse:
@@ -112,7 +112,7 @@ class Manager:
                             repl = self._free.pop(i)
                             self._busy.add(repl)
 
-                            logger.info(
+                            logger.debug(
                                 f"\\[{repl.uuid.hex[:8]}] Reusing ({'started' if repl.is_running else 'non-started'}) REPL for {snippet_id}"
                             )
                             return repl
@@ -154,7 +154,7 @@ class Manager:
                     raise NoAvailableReplError(f"Timed out after {timeout}s")
 
                 try:
-                    logger.info(
+                    logger.debug(
                         f"Waiting for a REPL to become available (timeout in {remaining:.2f}s)"
                     )
                     # Wait for a REPL to be released
@@ -191,7 +191,7 @@ class Manager:
 
             if repl.exhausted:
                 uuid = repl.uuid
-                logger.info(f"REPL {uuid.hex[:8]} is exhausted, closing it")
+                logger.debug(f"REPL {uuid.hex[:8]} is exhausted, closing it")
                 self._busy.discard(repl)
 
                 asyncio.create_task(close_verbose(repl))
@@ -200,7 +200,7 @@ class Manager:
             self._busy.remove(repl)
             self._free.append(repl)
             repl.last_check_at = datetime.now()
-            logger.info(f"\\[{repl.uuid.hex[:8]}] Released!")
+            logger.debug(f"\\[{repl.uuid.hex[:8]}] Released!")
             self._cond.notify(1)
 
     async def start_new(self, header: str) -> Repl:

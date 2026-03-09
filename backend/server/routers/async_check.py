@@ -74,7 +74,7 @@ async def submit_async_check(
                 ),
             )
 
-    logger.bind(endpoint="api.async.submit").info(
+    logger.bind(endpoint="api.async.submit").debug(
         "Async submit received: snippets={} timeout={} debug={} reuse={} infotree={}",
         len(normalized_payload.snippets),
         normalized_payload.timeout,
@@ -87,7 +87,7 @@ async def submit_async_check(
         logger.bind(
             endpoint="api.async.submit",
             job_id=response.job_id,
-        ).info(
+        ).debug(
             "Async submit accepted: job_id={} total_snippets={} expires_at={}",
             response.job_id,
             response.total_snippets,
@@ -145,7 +145,7 @@ async def get_async_check_status(
         if poll is None:
             logger.warning("Async poll miss: job_id={}", job_id)
             raise HTTPException(status_code=404, detail="Async job not found or expired")
-        logger.info(
+        logger.debug(
             "Async poll: job_id={} status={} done={} failed={} running={} total={} has_results={}",
             poll.job_id,
             poll.status,
@@ -192,7 +192,7 @@ async def get_async_metrics(
             metrics.queue_depth,
             metrics.inflight_jobs,
         )
-    logger.bind(endpoint="api.async.metrics").info(
+    logger.bind(endpoint="api.async.metrics").debug(
         "Async metrics: queue_depth={} inflight_jobs={} running_tasks={} oldest_queued_age_sec={:.3f} dequeue_rate={:.3f} enqueue_rate={:.3f}",
         metrics.queue_depth,
         metrics.inflight_jobs,

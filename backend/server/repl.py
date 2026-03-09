@@ -36,9 +36,8 @@ async def log_snippet(uuid: UUID, snippet_id: str, code: str) -> None:
     if settings.environment == Environment.prod:
         header = f"[{uuid.hex[:8]}] Running snippet {snippet_id}:"
         async with log_lock:
-            logger.info(header)
-            # Log the code as part of the message or in a separate log entry
-            logger.info(f"Code snippet:\n{code or '<empty>'}")
+            logger.debug(header)
+            logger.opt(lazy=True).debug("Code snippet:\n{}", lambda: code or "<empty>")
     else:
         header = f"\\[{uuid.hex[:8]}] Running snippet [bold magenta]{snippet_id}[/bold magenta]:"
         syntax = Syntax(
@@ -168,7 +167,7 @@ class Repl:
         self._cpu_task = self._loop.create_task(self._cpu_monitor())
         self._mem_task = self._loop.create_task(self._mem_monitor())
 
-        logger.info(f"\\[{self.uuid.hex[:8]}] Started")
+        logger.debug(f"\\[{self.uuid.hex[:8]}] Started")
 
     @staticmethod
     def _sum_cpu_times(proc: psutil.Process) -> float:
@@ -361,7 +360,7 @@ class Repl:
 
 async def close_verbose(repl: Repl) -> None:
     uuid = repl.uuid
-    logger.info(f"Closing REPL {uuid.hex[:8]}")
+    logger.debug(f"Closing REPL {uuid.hex[:8]}")
     await repl.close()
     del repl
-    logger.info(f"Closed REPL {uuid.hex[:8]}")
+    logger.debug(f"Closed REPL {uuid.hex[:8]}")

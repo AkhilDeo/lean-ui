@@ -123,6 +123,42 @@ def _iso_to_datetime(value: str | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
+METRICS_STARTED_AT_FIELD = "started_at_epoch_s"
+METRICS_ENQUEUED_FIELD = "enqueued_tasks"
+METRICS_DEQUEUED_FIELD = "dequeued_tasks"
+METRICS_INFLIGHT_JOBS_FIELD = "inflight_jobs"
+METRICS_RUNNING_TASKS_FIELD = "running_tasks"
+
+
+def _decode_redis_hash(raw: dict[Any, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        key_s = k.decode("utf-8") if isinstance(k, bytes) else str(k)
+        val_s = v.decode("utf-8") if isinstance(v, bytes) else str(v)
+        out[key_s] = val_s
+    return out
+
+
+def _metrics_from_meta_snapshots(metas: list[dict[str, str]]) -> tuple[int, int]:
+    inflight_jobs = 0
+    running_tasks = 0
+    for meta in metas:
+        status = meta.get("status", AsyncJobStatus.queued.value)
+        total = int(meta.get("total", 0))
+        done = int(meta.get("done", 0))
+        failed = int(meta.get("failed", 0))
+        running = int(meta.get("running", 0))
+        running_tasks += max(running, 0)
+        is_terminal = status in {
+            AsyncJobStatus.completed.value,
+            AsyncJobStatus.failed.value,
+            AsyncJobStatus.expired.value,
+        }
+        if not is_terminal and (done + failed) < total:
+            inflight_jobs += 1
+    return inflight_jobs, running_tasks
+
+
 @dataclass
 class RedisAsyncJobs:
     redis: Redis
@@ -146,8 +182,8 @@ class RedisAsyncJobs:
             return
         key = self._metrics_key()
         pipe = self.redis.pipeline(transaction=True)
-        pipe.hsetnx(key, "started_at_epoch_s", f"{time.time():.6f}")
-        pipe.hincrby(key, "enqueued_tasks", count)
+        pipe.hsetnx(key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
+        pipe.hincrby(key, METRICS_ENQUEUED_FIELD, count)
         await pipe.execute()
 
     async def _record_dequeue_count(self, count: int) -> None:
@@ -155,14 +191,14 @@ class RedisAsyncJobs:
             return
         key = self._metrics_key()
         pipe = self.redis.pipeline(transaction=True)
-        pipe.hsetnx(key, "started_at_epoch_s", f"{time.time():.6f}")
-        pipe.hincrby(key, "dequeued_tasks", count)
+        pipe.hsetnx(key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
+        pipe.hincrby(key, METRICS_DEQUEUED_FIELD, count)
         await pipe.execute()
 
     async def submit(self, request: CheckRequest) -> AsyncSubmitResponse:
         n = len(request.snippets)
         queue_depth = await self.queue.length()
-        logger.info(
+        logger.debug(
             "Async submit preflight (redis): queue={} depth={} incoming={} backlog_limit={}",
             self.queue_name,
             queue_depth,
@@ -186,6 +222,7 @@ class RedisAsyncJobs:
         queued_at = _now_iso()
         expires_at = _expires_iso(self.ttl_sec)
         meta_key = self._meta_key(job_id)
+        metrics_key = self._metrics_key()
         results_key = self._results_key(job_id)
 
         tasks = [
@@ -218,10 +255,12 @@ class RedisAsyncJobs:
         )
         if n > 0:
             pipe.rpush(results_key, *([""] * n))
+            pipe.hsetnx(metrics_key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
+            pipe.hincrby(metrics_key, METRICS_INFLIGHT_JOBS_FIELD, 1)
         pipe.expire(meta_key, self.ttl_sec)
         pipe.expire(results_key, self.ttl_sec)
         await pipe.execute()
-        job_logger.info(
+        job_logger.debug(
             "Async job metadata stored (redis): job_id={} total={} meta_key={} results_key={} ttl_sec={}",
             job_id,
             n,
@@ -233,7 +272,7 @@ class RedisAsyncJobs:
         try:
             await self.queue.enqueue_many(tasks)
             await self._record_enqueue_count(len(tasks))
-            job_logger.info(
+            job_logger.debug(
                 "Async job enqueued (redis): job_id={} tasks={} queue={}",
                 job_id,
                 len(tasks),
@@ -265,12 +304,7 @@ class RedisAsyncJobs:
         raw = await self.redis.hgetall(key)
         if not raw:
             return None
-        out: dict[str, str] = {}
-        for k, v in raw.items():
-            key_s = k.decode("utf-8") if isinstance(k, bytes) else str(k)
-            val_s = v.decode("utf-8") if isinstance(v, bytes) else str(v)
-            out[key_s] = val_s
-        return out
+        return _decode_redis_hash(raw)
 
     async def poll(self, job_id: str) -> AsyncPollResponse | None:
         job_logger = logger.bind(job_id=job_id)
@@ -331,6 +365,7 @@ class RedisAsyncJobs:
             snippet_id=task.snippet.id,
         )
         meta_key = self._meta_key(task.job_id)
+        metrics_key = self._metrics_key()
         if not await self.redis.exists(meta_key):
             task_logger.warning(
                 "Async task start ignored (redis, missing job): job_id={} task_id={} index={} snippet_id={}",
@@ -346,10 +381,11 @@ class RedisAsyncJobs:
             mapping={"status": AsyncJobStatus.running.value, "updated_at": _now_iso()},
         )
         pipe.hincrby(meta_key, "running", 1)
+        pipe.hincrby(metrics_key, METRICS_RUNNING_TASKS_FIELD, 1)
         pipe.expire(meta_key, self.ttl_sec)
         pipe.expire(self._results_key(task.job_id), self.ttl_sec)
         await pipe.execute()
-        task_logger.info(
+        task_logger.debug(
             "Async task started (redis): job_id={} task_id={} index={} snippet_id={}",
             task.job_id,
             task.task_id,
@@ -370,8 +406,10 @@ class RedisAsyncJobs:
             snippet_id=task.snippet.id,
         )
         meta_key = self._meta_key(task.job_id)
+        metrics_key = self._metrics_key()
         results_key = self._results_key(task.job_id)
         if not await self.redis.exists(meta_key):
+            await self.redis.hincrby(metrics_key, METRICS_RUNNING_TASKS_FIELD, -1)
             task_logger.warning(
                 "Async result write ignored (redis, missing job): job_id={} task_id={} index={} failure={}",
                 task.job_id,
@@ -384,6 +422,7 @@ class RedisAsyncJobs:
         pipe = self.redis.pipeline(transaction=True)
         pipe.lset(results_key, task.index, serialize_result(payload))
         pipe.hincrby(meta_key, "running", -1)
+        pipe.hincrby(metrics_key, METRICS_RUNNING_TASKS_FIELD, -1)
         if is_failure:
             pipe.hincrby(meta_key, "failed", 1)
         else:
@@ -399,7 +438,7 @@ class RedisAsyncJobs:
         done = int(done_b or 0)
         failed = int(failed_b or 0)
         total = int(total_b or 0)
-        task_logger.info(
+        task_logger.debug(
             "Async result stored (redis): job_id={} task_id={} index={} snippet_id={} failure={} done={} failed={} total={}",
             task.job_id,
             task.task_id,
@@ -411,14 +450,17 @@ class RedisAsyncJobs:
             total,
         )
         if done + failed >= total:
-            await self.redis.hset(
+            pipe = self.redis.pipeline(transaction=True)
+            pipe.hset(
                 meta_key,
                 mapping={
                     "status": AsyncJobStatus.completed.value,
                     "updated_at": _now_iso(),
                 },
             )
-            task_logger.info(
+            pipe.hincrby(metrics_key, METRICS_INFLIGHT_JOBS_FIELD, -1)
+            await pipe.execute()
+            task_logger.debug(
                 "Async job completed (redis): job_id={} done={} failed={} total={}",
                 task.job_id,
                 done,
@@ -469,12 +511,7 @@ class RedisAsyncJobs:
                 raw = await self.redis.hgetall(key)
                 if not raw:
                     continue
-                meta: dict[str, str] = {}
-                for k, v in raw.items():
-                    key_s = k.decode("utf-8") if isinstance(k, bytes) else str(k)
-                    val_s = v.decode("utf-8") if isinstance(v, bytes) else str(v)
-                    meta[key_s] = val_s
-                metas.append(meta)
+                metas.append(_decode_redis_hash(raw))
             if cursor in {0, "0"}:
                 break
         return metas
@@ -482,34 +519,18 @@ class RedisAsyncJobs:
     async def metrics(self) -> AsyncQueueMetrics:
         queue_depth = await self.queue.length()
         oldest_queued_age_sec = await self._oldest_queue_age_sec()
-        metas = await self._all_meta()
-
-        inflight_jobs = 0
-        running_tasks = 0
-        for meta in metas:
-            status = meta.get("status", AsyncJobStatus.queued.value)
-            total = int(meta.get("total", 0))
-            done = int(meta.get("done", 0))
-            failed = int(meta.get("failed", 0))
-            running = int(meta.get("running", 0))
-            running_tasks += max(running, 0)
-            is_terminal = status in {
-                AsyncJobStatus.completed.value,
-                AsyncJobStatus.failed.value,
-                AsyncJobStatus.expired.value,
-            }
-            if not is_terminal and (done + failed) < total:
-                inflight_jobs += 1
-
         metrics_raw = await self.redis.hgetall(self._metrics_key())
-        metrics_map: dict[str, str] = {}
-        for k, v in metrics_raw.items():
-            key_s = k.decode("utf-8") if isinstance(k, bytes) else str(k)
-            val_s = v.decode("utf-8") if isinstance(v, bytes) else str(v)
-            metrics_map[key_s] = val_s
-        started_epoch = float(metrics_map.get("started_at_epoch_s", f"{time.time():.6f}"))
-        enqueued = int(metrics_map.get("enqueued_tasks", 0))
-        dequeued = int(metrics_map.get("dequeued_tasks", 0))
+        metrics_map = _decode_redis_hash(metrics_raw)
+        inflight_jobs_raw = metrics_map.get(METRICS_INFLIGHT_JOBS_FIELD)
+        running_tasks_raw = metrics_map.get(METRICS_RUNNING_TASKS_FIELD)
+        if inflight_jobs_raw is None or running_tasks_raw is None:
+            inflight_jobs, running_tasks = _metrics_from_meta_snapshots(await self._all_meta())
+        else:
+            inflight_jobs = max(int(inflight_jobs_raw), 0)
+            running_tasks = max(int(running_tasks_raw), 0)
+        started_epoch = float(metrics_map.get(METRICS_STARTED_AT_FIELD, f"{time.time():.6f}"))
+        enqueued = int(metrics_map.get(METRICS_ENQUEUED_FIELD, 0))
+        dequeued = int(metrics_map.get(METRICS_DEQUEUED_FIELD, 0))
         elapsed = max(time.time() - started_epoch, 1e-6)
         return AsyncQueueMetrics(
             queue_depth=queue_depth,
@@ -521,7 +542,7 @@ class RedisAsyncJobs:
         )
 
     async def close(self) -> None:
-        logger.info("Closing async jobs backend (redis): queue={}", self.queue_name)
+        logger.debug("Closing async jobs backend (redis): queue={}", self.queue_name)
         await self.queue.close()
 
 
@@ -536,11 +557,13 @@ class InMemoryAsyncJobs:
         self._created_at_monotonic = time.monotonic()
         self._enqueue_count = 0
         self._dequeue_count = 0
+        self._inflight_jobs = 0
+        self._running_tasks = 0
 
     async def submit(self, request: CheckRequest) -> AsyncSubmitResponse:
         n = len(request.snippets)
         queue_depth = await self.queue.length()
-        logger.info(
+        logger.debug(
             "Async submit preflight (in-memory): queue_depth={} incoming={} backlog_limit={}",
             queue_depth,
             n,
@@ -588,10 +611,12 @@ class InMemoryAsyncJobs:
                 "error": None,
             }
             self._results[job_id] = [None] * n
+            if n > 0:
+                self._inflight_jobs += 1
 
         await self.queue.enqueue_many(tasks)
         self._enqueue_count += len(tasks)
-        job_logger.info(
+        job_logger.debug(
             "Async job enqueued (in-memory): job_id={} tasks={} ttl_sec={}",
             job_id,
             len(tasks),
@@ -668,8 +693,9 @@ class InMemoryAsyncJobs:
                 return
             meta["status"] = AsyncJobStatus.running
             meta["running"] += 1
+            self._running_tasks += 1
             meta["updated_at"] = _now_iso()
-            task_logger.info(
+            task_logger.debug(
                 "Async task started (in-memory): job_id={} task_id={} index={} snippet_id={}",
                 task.job_id,
                 task.task_id,
@@ -699,9 +725,10 @@ class InMemoryAsyncJobs:
             results = self._results[task.job_id]
             results[task.index] = response.model_dump(exclude_none=True)
             meta["running"] = max(meta["running"] - 1, 0)
+            self._running_tasks = max(self._running_tasks - 1, 0)
             meta["done"] += 1
             meta["updated_at"] = _now_iso()
-            task_logger.info(
+            task_logger.debug(
                 "Async result stored (in-memory): job_id={} task_id={} index={} snippet_id={} failure=false done={} failed={} total={}",
                 task.job_id,
                 task.task_id,
@@ -713,7 +740,8 @@ class InMemoryAsyncJobs:
             )
             if meta["done"] + meta["failed"] >= meta["total"]:
                 meta["status"] = AsyncJobStatus.completed
-                task_logger.info(
+                self._inflight_jobs = max(self._inflight_jobs - 1, 0)
+                task_logger.debug(
                     "Async job completed (in-memory): job_id={} done={} failed={} total={}",
                     task.job_id,
                     meta["done"],
@@ -744,6 +772,7 @@ class InMemoryAsyncJobs:
             results = self._results[task.job_id]
             results[task.index] = response.model_dump(exclude_none=True)
             meta["running"] = max(meta["running"] - 1, 0)
+            self._running_tasks = max(self._running_tasks - 1, 0)
             meta["failed"] += 1
             meta["updated_at"] = _now_iso()
             task_logger.warning(
@@ -759,7 +788,8 @@ class InMemoryAsyncJobs:
             )
             if meta["done"] + meta["failed"] >= meta["total"]:
                 meta["status"] = AsyncJobStatus.completed
-                task_logger.info(
+                self._inflight_jobs = max(self._inflight_jobs - 1, 0)
+                task_logger.debug(
                     "Async job completed (in-memory): job_id={} done={} failed={} total={}",
                     task.job_id,
                     meta["done"],
@@ -768,7 +798,7 @@ class InMemoryAsyncJobs:
                 )
 
     async def close(self) -> None:
-        logger.info("Closing async jobs backend (in-memory)")
+        logger.debug("Closing async jobs backend (in-memory)")
         await self.queue.close()
 
     async def metrics(self) -> AsyncQueueMetrics:
@@ -789,28 +819,9 @@ class InMemoryAsyncJobs:
             except Exception:
                 oldest_queued_age_sec = 0.0
 
-        inflight_jobs = 0
-        running_tasks = 0
         async with self._lock:
-            for meta in self._meta.values():
-                running = int(meta.get("running", 0))
-                total = int(meta.get("total", 0))
-                done = int(meta.get("done", 0))
-                failed = int(meta.get("failed", 0))
-                status_obj = meta.get("status", AsyncJobStatus.queued)
-                status = (
-                    status_obj.value
-                    if isinstance(status_obj, AsyncJobStatus)
-                    else str(status_obj)
-                )
-                running_tasks += max(running, 0)
-                is_terminal = status in {
-                    AsyncJobStatus.completed.value,
-                    AsyncJobStatus.failed.value,
-                    AsyncJobStatus.expired.value,
-                }
-                if not is_terminal and (done + failed) < total:
-                    inflight_jobs += 1
+            inflight_jobs = self._inflight_jobs
+            running_tasks = self._running_tasks
 
         elapsed = max(time.monotonic() - self._created_at_monotonic, 1e-6)
         return AsyncQueueMetrics(

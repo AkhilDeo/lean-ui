@@ -191,6 +191,62 @@ async def test_async_metrics_endpoint_returns_queue_health() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_metrics_track_inflight_jobs_and_running_tasks() -> None:
+    app = _build_app()
+
+    async with LifespanManager(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
+        ) as client:
+            payload = CheckRequest(
+                snippets=[
+                    Snippet(id="one", code="#check Nat"),
+                    Snippet(id="two", code="#check Int"),
+                ],
+                timeout=30,
+            ).model_dump()
+            submit = await client.post("/async/check", json=payload)
+            assert submit.status_code == 200
+
+            metrics = await client.get("/async/metrics")
+            assert metrics.status_code == 200
+            queued = metrics.json()
+            assert queued["inflight_jobs"] == 1
+            assert queued["running_tasks"] == 0
+
+            jobs = app.state.async_jobs
+            task = await jobs.dequeue_task(timeout_sec=1)
+            assert task is not None
+            await jobs.mark_task_started(task)
+
+            metrics = await client.get("/async/metrics")
+            assert metrics.status_code == 200
+            running = metrics.json()
+            assert running["inflight_jobs"] == 1
+            assert running["running_tasks"] == 1
+
+            await jobs.mark_task_success(
+                task, ReplResponse(id=task.snippet.id, time=0.1, response={"env": 0})
+            )
+
+            second_task = await jobs.dequeue_task(timeout_sec=1)
+            assert second_task is not None
+            await jobs.mark_task_started(second_task)
+            await jobs.mark_task_success(
+                second_task,
+                ReplResponse(id=second_task.snippet.id, time=0.1, response={"env": 0}),
+            )
+
+            metrics = await client.get("/async/metrics")
+            assert metrics.status_code == 200
+            finished = metrics.json()
+            assert finished["inflight_jobs"] == 0
+            assert finished["running_tasks"] == 0
+
+
+@pytest.mark.asyncio
 async def test_async_metrics_endpoint_disabled_returns_404() -> None:
     app = _build_app(async_metrics_enabled=False)
 

@@ -149,7 +149,7 @@ app = create_app(settings)
 async def log_requests(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    logger.bind(path=request.url.path, method=request.method).info("→ request")
+    logger.bind(path=request.url.path, method=request.method).debug("-> request")
     response = await call_next(request)
-    logger.bind(status_code=response.status_code).info("← response")
+    logger.bind(status_code=response.status_code).debug("<- response")
     return response
