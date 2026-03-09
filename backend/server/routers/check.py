@@ -85,15 +85,16 @@ async def wait_for_task_or_disconnect(
     disconnect_poll_interval_sec: float = 0.1,
 ) -> TaskResultT:
     while True:
-        try:
-            return await asyncio.wait_for(
-                asyncio.shield(task),
-                timeout=disconnect_poll_interval_sec,
-            )
-        except asyncio.TimeoutError:
-            if await raw_request.is_disconnected():
-                task.cancel()
-                raise HTTPException(499, "Client disconnected") from None
+        done, _ = await asyncio.wait(
+            {task},
+            timeout=disconnect_poll_interval_sec,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if done:
+            return await task
+        if await raw_request.is_disconnected():
+            task.cancel()
+            raise HTTPException(499, "Client disconnected") from None
 
 
 async def run_checks(
