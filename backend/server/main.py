@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import ORJSONResponse
 from loguru import logger
 from pydantic.json_schema import GenerateJsonSchema
 
@@ -113,6 +114,7 @@ def create_app(settings: Settings) -> FastAPI:
         title="Kimina Lean Server API",
         description="Check Lean 4 snippets at scale via REPL",
         version=__version__,
+        default_response_class=ORJSONResponse,
         openapi_url="/api/openapi.json",
         docs_url="/docs",
         redoc_url="/redoc",
