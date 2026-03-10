@@ -248,6 +248,7 @@ class RedisAsyncJobs:
             )
             for i, snippet in enumerate(request.snippets)
         ]
+        task_payloads = [task.model_dump_json() for task in tasks]
 
         pipe = self.redis.pipeline(transaction=True)
         pipe.hset(
@@ -273,8 +274,10 @@ class RedisAsyncJobs:
                 task_states_key,
                 mapping={str(task.index): AsyncJobStatus.queued.value for task in tasks},
             )
+            pipe.rpush(self.queue_name, *task_payloads)
             pipe.hsetnx(metrics_key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
             pipe.hincrby(metrics_key, METRICS_INFLIGHT_JOBS_FIELD, 1)
+            pipe.hincrby(metrics_key, METRICS_ENQUEUED_FIELD, len(tasks))
         pipe.expire(meta_key, self.ttl_sec)
         pipe.expire(results_key, self.ttl_sec)
         pipe.expire(tasks_key, self.ttl_sec)
@@ -289,27 +292,12 @@ class RedisAsyncJobs:
             self.ttl_sec,
         )
 
-        try:
-            await self.queue.enqueue_many(tasks)
-            await self._record_enqueue_count(len(tasks))
-            job_logger.debug(
-                "Async job enqueued (redis): job_id={} tasks={} queue={}",
-                job_id,
-                len(tasks),
-                self.queue_name,
-            )
-        except Exception as e:
-            await self.redis.hset(
-                meta_key,
-                mapping={"status": AsyncJobStatus.failed.value, "error": "enqueue_failed"},
-            )
-            job_logger.exception(
-                "Async job enqueue failed (redis): job_id={} queue={} error={}",
-                job_id,
-                self.queue_name,
-                e,
-            )
-            raise
+        job_logger.debug(
+            "Async job enqueued (redis): job_id={} tasks={} queue={}",
+            job_id,
+            len(tasks),
+            self.queue_name,
+        )
 
         return AsyncSubmitResponse(
             job_id=job_id,
