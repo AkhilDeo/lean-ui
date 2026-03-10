@@ -35,7 +35,6 @@ class Manager:
         self._cond: asyncio.Condition | None = None
         self._free: list[Repl] = []
         self._busy: set[Repl] = set()
-        self._starting = 0
 
         logger.info(
             "REPL manager initialized with: MAX_REPLS={}, MAX_REPL_USES={}, MAX_REPL_MEM={} MB, MIN_HOST_FREE_MEM={} MB",
@@ -103,7 +102,7 @@ class Manager:
         while True:
             async with self._cond:
                 logger.debug(
-                    f"# Free = {len(self._free)} | # Busy = {len(self._busy)} | # Starting = {self._starting} | # Max = {self.max_repls}"
+                    f"# Free = {len(self._free)} | # Busy = {len(self._busy)} | # Max = {self.max_repls}"
                 )
                 if reuse:
                     for i, r in enumerate(self._free):
@@ -117,7 +116,7 @@ class Manager:
                                 f"\\[{repl.uuid.hex[:8]}] Reusing ({'started' if repl.is_running else 'non-started'}) REPL for {snippet_id}"
                             )
                             return repl
-                total = len(self._free) + len(self._busy) + self._starting
+                total = len(self._free) + len(self._busy)
                 if total < self.max_repls:
                     if not self._has_memory_headroom():
                         remaining = deadline - time()
@@ -140,7 +139,6 @@ class Manager:
                                 "Timed out waiting for host memory headroom"
                             ) from None
                         continue
-                    self._starting += 1
                     break
 
                 if self._free:
@@ -149,7 +147,6 @@ class Manager:
                     )  # Use the one that's been around the longest
                     self._free.remove(oldest)
                     repl_to_destroy = oldest
-                    self._starting += 1
                     break
 
                 remaining = deadline - time()
@@ -170,19 +167,7 @@ class Manager:
         if repl_to_destroy is not None:
             asyncio.create_task(close_verbose(repl_to_destroy))
 
-        try:
-            repl = await self.start_new(header)
-        except Exception:
-            async with self._cond:
-                self._starting = max(self._starting - 1, 0)
-                self._cond.notify(1)
-            raise
-
-        async with self._cond:
-            self._starting = max(self._starting - 1, 0)
-            self._busy.add(repl)
-            self._cond.notify(1)
-        return repl
+        return await self.start_new(header)
 
     async def destroy_repl(self, repl: Repl) -> None:
         self._ensure_lock()
@@ -219,9 +204,11 @@ class Manager:
             self._cond.notify(1)
 
     async def start_new(self, header: str) -> Repl:
-        return await Repl.create(
+        repl = await Repl.create(
             header, max_repl_uses=self.max_repl_uses, max_repl_mem=self.max_repl_mem
         )
+        self._busy.add(repl)
+        return repl
 
     async def cleanup(self) -> None:
         self._ensure_lock()
