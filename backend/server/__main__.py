@@ -9,24 +9,6 @@ from .main import app
 from .settings import Environment, settings
 
 
-def _uvicorn_loop_impl() -> str:
-    try:
-        import uvloop  # noqa: F401
-
-        return "uvloop"
-    except Exception:
-        return "auto"
-
-
-def _uvicorn_http_impl() -> str:
-    try:
-        import httptools  # noqa: F401
-
-        return "httptools"
-    except Exception:
-        return "auto"
-
-
 class InterceptHandler(logging.Handler):
     def emit(self, record: Any) -> None:
         try:
@@ -55,8 +37,6 @@ if __name__ == "__main__":
         host=settings.host,
         port=settings.port,
         backlog=4096,  # On Google Cloud VMs: `cat /proc/sys/net/core/somaxconn` = 4096
-        loop=_uvicorn_loop_impl(),
-        http=_uvicorn_http_impl(),
         use_colors=settings.environment != Environment.prod,
         log_config=None,
     )
