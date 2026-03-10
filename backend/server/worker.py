@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import signal
 import time
-from collections.abc import Callable
 
 from fastapi import HTTPException
 from loguru import logger
@@ -131,9 +129,8 @@ async def _consumer_loop(
     manager: Manager,
     task_timeout_sec: int,
     worker_retries: int,
-    stop_event: asyncio.Event,
 ) -> None:
-    while not stop_event.is_set():
+    while True:
         try:
             did_work = await process_task(
                 jobs=jobs,
@@ -142,13 +139,8 @@ async def _consumer_loop(
                 worker_retries=worker_retries,
                 consumer_id=consumer_id,
             )
-            if stop_event.is_set():
-                break
             if not did_work:
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=0.05)
-                except asyncio.TimeoutError:
-                    continue
+                await asyncio.sleep(0.05)
         except asyncio.CancelledError:
             logger.debug("Worker consumer cancelled: consumer_id={}", consumer_id)
             raise
@@ -159,34 +151,6 @@ async def _consumer_loop(
                 exc,
             )
             await asyncio.sleep(0.25)
-    logger.info("Worker consumer drained: consumer_id={}", consumer_id)
-
-
-def _install_shutdown_handlers(
-    *,
-    loop: asyncio.AbstractEventLoop,
-    stop_event: asyncio.Event,
-) -> Callable[[], None]:
-    installed: list[int] = []
-
-    def _request_shutdown(signame: str) -> None:
-        if stop_event.is_set():
-            return
-        logger.info("Worker received shutdown signal: {}", signame)
-        stop_event.set()
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, _request_shutdown, sig.name)
-            installed.append(sig)
-        except NotImplementedError:
-            continue
-
-    def _remove_handlers() -> None:
-        for sig in installed:
-            loop.remove_signal_handler(sig)
-
-    return _remove_handlers
 
 
 async def run_worker(settings: Settings | None = None) -> None:
@@ -194,11 +158,6 @@ async def run_worker(settings: Settings | None = None) -> None:
     if not cfg.async_enabled:
         raise RuntimeError("Worker requires LEAN_SERVER_ASYNC_ENABLED=true")
 
-    stop_event = asyncio.Event()
-    remove_shutdown_handlers = _install_shutdown_handlers(
-        loop=asyncio.get_running_loop(),
-        stop_event=stop_event,
-    )
     jobs = await create_async_jobs(cfg)
     manager = Manager(
         max_repls=cfg.max_repls,
@@ -229,21 +188,17 @@ async def run_worker(settings: Settings | None = None) -> None:
                 manager=manager,
                 task_timeout_sec=3,
                 worker_retries=cfg.async_worker_retries,
-                stop_event=stop_event,
             ),
             name=f"async-worker-consumer-{i + 1}",
         )
         for i in range(worker_concurrency)
     ]
     try:
-        await stop_event.wait()
-        logger.info("Worker shutdown requested; waiting for consumers to drain")
         await asyncio.gather(*consumers)
     except asyncio.CancelledError:
         logger.info("Worker cancelled")
         raise
     finally:
-        remove_shutdown_handlers()
         for task in consumers:
             task.cancel()
         await asyncio.gather(*consumers, return_exceptions=True)
