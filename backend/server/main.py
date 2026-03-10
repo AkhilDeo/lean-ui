@@ -62,7 +62,6 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.settings = settings
         app.state.manager = manager
         app.state.settings = settings
-        app.state.request_debug_logging = settings.log_level.strip().upper() == "DEBUG"
 
         if settings.async_enabled:
             app.state.async_jobs = await create_async_jobs(settings)
@@ -150,8 +149,6 @@ app = create_app(settings)
 async def log_requests(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    if not bool(getattr(request.app.state, "request_debug_logging", False)):
-        return await call_next(request)
     logger.bind(path=request.url.path, method=request.method).debug("-> request")
     response = await call_next(request)
     logger.bind(status_code=response.status_code).debug("<- response")
