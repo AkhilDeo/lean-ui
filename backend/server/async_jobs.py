@@ -387,7 +387,11 @@ class RedisAsyncJobs:
         meta_key = self._meta_key(task.job_id)
         task_states_key = self._task_states_key(task.job_id)
         metrics_key = self._metrics_key()
-        if not await self.redis.exists(meta_key):
+        preflight = self.redis.pipeline(transaction=False)
+        preflight.exists(meta_key)
+        preflight.hget(task_states_key, str(task.index))
+        exists_raw, state_raw = await preflight.execute()
+        if not bool(exists_raw):
             task_logger.warning(
                 "Async task start ignored (redis, missing job): job_id={} task_id={} index={} snippet_id={}",
                 task.job_id,
@@ -396,7 +400,6 @@ class RedisAsyncJobs:
                 task.snippet.id,
             )
             return
-        state_raw = await self.redis.hget(task_states_key, str(task.index))
         state = (
             state_raw.decode("utf-8")
             if isinstance(state_raw, bytes)
@@ -449,7 +452,11 @@ class RedisAsyncJobs:
         results_key = self._results_key(task.job_id)
         task_states_key = self._task_states_key(task.job_id)
         tasks_key = self._tasks_key(task.job_id)
-        if not await self.redis.exists(meta_key):
+        preflight = self.redis.pipeline(transaction=False)
+        preflight.exists(meta_key)
+        preflight.hget(task_states_key, str(task.index))
+        exists_raw, state_raw = await preflight.execute()
+        if not bool(exists_raw):
             await self.redis.hincrby(metrics_key, METRICS_RUNNING_TASKS_FIELD, -1)
             task_logger.warning(
                 "Async result write ignored (redis, missing job): job_id={} task_id={} index={} failure={}",
@@ -459,7 +466,6 @@ class RedisAsyncJobs:
                 is_failure,
             )
             return
-        state_raw = await self.redis.hget(task_states_key, str(task.index))
         state = (
             state_raw.decode("utf-8")
             if isinstance(state_raw, bytes)
@@ -495,11 +501,9 @@ class RedisAsyncJobs:
         pipe.expire(results_key, self.ttl_sec)
         pipe.expire(task_states_key, self.ttl_sec)
         pipe.expire(tasks_key, self.ttl_sec)
-        await pipe.execute()
-
-        done_b, failed_b, total_b = await self.redis.hmget(
-            meta_key, ("done", "failed", "total")
-        )
+        pipe.hmget(meta_key, ("done", "failed", "total"))
+        results = await pipe.execute()
+        done_b, failed_b, total_b = results[-1]
         done = int(done_b or 0)
         failed = int(failed_b or 0)
         total = int(total_b or 0)
