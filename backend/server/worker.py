@@ -180,6 +180,13 @@ async def run_worker(settings: Settings | None = None) -> None:
         cfg.max_repl_uses,
         cfg.async_worker_retries,
     )
+    if cfg.init_repls:
+        logger.info(
+            "Async worker prewarming configured REPL pool before accepting jobs: {}",
+            cfg.init_repls,
+        )
+        await manager.initialize_repls()
+        logger.info("Async worker REPL prewarm complete")
     consumers = [
         asyncio.create_task(
             _consumer_loop(
