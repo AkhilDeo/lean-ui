@@ -44,27 +44,6 @@ class Manager:
             min_host_free_mem,
         )
 
-    def _header_counts(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for repl in self._free:
-            counts[repl.header] = counts.get(repl.header, 0) + 1
-        for repl in self._busy:
-            counts[repl.header] = counts.get(repl.header, 0) + 1
-        return counts
-
-    def _select_repl_to_destroy(self) -> Repl:
-        if not self._free:
-            raise RuntimeError("No free REPL available to destroy")
-
-        counts = self._header_counts()
-        evictable = [
-            repl
-            for repl in self._free
-            if counts.get(repl.header, 0) > int(self.init_repls.get(repl.header, 0))
-        ]
-        pool = evictable or self._free
-        return min(pool, key=lambda repl: repl.last_check_at)
-
     def _has_memory_headroom(self) -> bool:
         """
         Keep host headroom before creating a new REPL process.
@@ -163,8 +142,11 @@ class Manager:
                     break
 
                 if self._free:
-                    repl_to_destroy = self._select_repl_to_destroy()
-                    self._free.remove(repl_to_destroy)
+                    oldest = min(
+                        self._free, key=lambda r: r.last_check_at
+                    )  # Use the one that's been around the longest
+                    self._free.remove(oldest)
+                    repl_to_destroy = oldest
                     break
 
                 remaining = deadline - time()
