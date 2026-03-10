@@ -95,6 +95,8 @@ class AsyncJobs(Protocol):
 
     async def metrics(self) -> AsyncQueueMetrics: ...
 
+    async def recover_running_tasks(self) -> int: ...
+
     async def close(self) -> None: ...
 
 
@@ -174,6 +176,12 @@ class RedisAsyncJobs:
     def _results_key(self, job_id: str) -> str:
         return f"{self.key_prefix}:job:{job_id}:results"
 
+    def _tasks_key(self, job_id: str) -> str:
+        return f"{self.key_prefix}:job:{job_id}:tasks"
+
+    def _task_states_key(self, job_id: str) -> str:
+        return f"{self.key_prefix}:job:{job_id}:task_states"
+
     def _metrics_key(self) -> str:
         return f"{self.key_prefix}:queue:{self.queue_name}:metrics"
 
@@ -224,6 +232,8 @@ class RedisAsyncJobs:
         meta_key = self._meta_key(job_id)
         metrics_key = self._metrics_key()
         results_key = self._results_key(job_id)
+        tasks_key = self._tasks_key(job_id)
+        task_states_key = self._task_states_key(job_id)
 
         tasks = [
             AsyncTaskPayload.create(
@@ -255,10 +265,20 @@ class RedisAsyncJobs:
         )
         if n > 0:
             pipe.rpush(results_key, *([""] * n))
+            pipe.hset(
+                tasks_key,
+                mapping={str(task.index): task.model_dump_json() for task in tasks},
+            )
+            pipe.hset(
+                task_states_key,
+                mapping={str(task.index): AsyncJobStatus.queued.value for task in tasks},
+            )
             pipe.hsetnx(metrics_key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
             pipe.hincrby(metrics_key, METRICS_INFLIGHT_JOBS_FIELD, 1)
         pipe.expire(meta_key, self.ttl_sec)
         pipe.expire(results_key, self.ttl_sec)
+        pipe.expire(tasks_key, self.ttl_sec)
+        pipe.expire(task_states_key, self.ttl_sec)
         await pipe.execute()
         job_logger.debug(
             "Async job metadata stored (redis): job_id={} total={} meta_key={} results_key={} ttl_sec={}",
@@ -365,6 +385,7 @@ class RedisAsyncJobs:
             snippet_id=task.snippet.id,
         )
         meta_key = self._meta_key(task.job_id)
+        task_states_key = self._task_states_key(task.job_id)
         metrics_key = self._metrics_key()
         if not await self.redis.exists(meta_key):
             task_logger.warning(
@@ -375,15 +396,33 @@ class RedisAsyncJobs:
                 task.snippet.id,
             )
             return
+        state_raw = await self.redis.hget(task_states_key, str(task.index))
+        state = (
+            state_raw.decode("utf-8")
+            if isinstance(state_raw, bytes)
+            else str(state_raw or AsyncJobStatus.queued.value)
+        )
+        if state in {AsyncJobStatus.completed.value, AsyncJobStatus.failed.value}:
+            task_logger.debug(
+                "Async task start skipped (redis, already terminal): job_id={} task_id={} index={} state={}",
+                task.job_id,
+                task.task_id,
+                task.index,
+                state,
+            )
+            return
         pipe = self.redis.pipeline(transaction=True)
         pipe.hset(
             meta_key,
             mapping={"status": AsyncJobStatus.running.value, "updated_at": _now_iso()},
         )
-        pipe.hincrby(meta_key, "running", 1)
-        pipe.hincrby(metrics_key, METRICS_RUNNING_TASKS_FIELD, 1)
+        if state != AsyncJobStatus.running.value:
+            pipe.hset(task_states_key, str(task.index), AsyncJobStatus.running.value)
+            pipe.hincrby(meta_key, "running", 1)
+            pipe.hincrby(metrics_key, METRICS_RUNNING_TASKS_FIELD, 1)
         pipe.expire(meta_key, self.ttl_sec)
         pipe.expire(self._results_key(task.job_id), self.ttl_sec)
+        pipe.expire(task_states_key, self.ttl_sec)
         await pipe.execute()
         task_logger.debug(
             "Async task started (redis): job_id={} task_id={} index={} snippet_id={}",
@@ -408,6 +447,8 @@ class RedisAsyncJobs:
         meta_key = self._meta_key(task.job_id)
         metrics_key = self._metrics_key()
         results_key = self._results_key(task.job_id)
+        task_states_key = self._task_states_key(task.job_id)
+        tasks_key = self._tasks_key(task.job_id)
         if not await self.redis.exists(meta_key):
             await self.redis.hincrby(metrics_key, METRICS_RUNNING_TASKS_FIELD, -1)
             task_logger.warning(
@@ -418,11 +459,33 @@ class RedisAsyncJobs:
                 is_failure,
             )
             return
+        state_raw = await self.redis.hget(task_states_key, str(task.index))
+        state = (
+            state_raw.decode("utf-8")
+            if isinstance(state_raw, bytes)
+            else str(state_raw or AsyncJobStatus.queued.value)
+        )
+        if state in {AsyncJobStatus.completed.value, AsyncJobStatus.failed.value}:
+            task_logger.debug(
+                "Async result ignored (redis, already terminal): job_id={} task_id={} index={} state={}",
+                task.job_id,
+                task.task_id,
+                task.index,
+                state,
+            )
+            return
 
         pipe = self.redis.pipeline(transaction=True)
         pipe.lset(results_key, task.index, serialize_result(payload))
-        pipe.hincrby(meta_key, "running", -1)
-        pipe.hincrby(metrics_key, METRICS_RUNNING_TASKS_FIELD, -1)
+        pipe.hset(
+            task_states_key,
+            str(task.index),
+            AsyncJobStatus.failed.value if is_failure else AsyncJobStatus.completed.value,
+        )
+        pipe.hdel(tasks_key, str(task.index))
+        if state == AsyncJobStatus.running.value:
+            pipe.hincrby(meta_key, "running", -1)
+            pipe.hincrby(metrics_key, METRICS_RUNNING_TASKS_FIELD, -1)
         if is_failure:
             pipe.hincrby(meta_key, "failed", 1)
         else:
@@ -430,6 +493,8 @@ class RedisAsyncJobs:
         pipe.hset(meta_key, mapping={"updated_at": _now_iso()})
         pipe.expire(meta_key, self.ttl_sec)
         pipe.expire(results_key, self.ttl_sec)
+        pipe.expire(task_states_key, self.ttl_sec)
+        pipe.expire(tasks_key, self.ttl_sec)
         await pipe.execute()
 
         done_b, failed_b, total_b = await self.redis.hmget(
@@ -540,6 +605,75 @@ class RedisAsyncJobs:
             dequeue_rate=dequeued / elapsed,
             enqueue_rate=enqueued / elapsed,
         )
+
+    async def recover_running_tasks(self) -> int:
+        recovered = 0
+        cursor: int | str = 0
+        pattern = f"{self.key_prefix}:job:*:meta"
+        while True:
+            cursor, keys = await self.redis.scan(cursor=cursor, match=pattern, count=200)
+            for key in keys:
+                key_text = key.decode("utf-8") if isinstance(key, bytes) else str(key)
+                raw_meta = await self.redis.hgetall(key)
+                if not raw_meta:
+                    continue
+                meta = _decode_redis_hash(raw_meta)
+                status = meta.get("status", AsyncJobStatus.queued.value)
+                if status in {
+                    AsyncJobStatus.completed.value,
+                    AsyncJobStatus.failed.value,
+                    AsyncJobStatus.expired.value,
+                }:
+                    continue
+                job_id = key_text.split(":")[-2]
+                task_states = _decode_redis_hash(
+                    await self.redis.hgetall(self._task_states_key(job_id))
+                )
+                if not task_states:
+                    continue
+                raw_tasks = _decode_redis_hash(await self.redis.hgetall(self._tasks_key(job_id)))
+                running_indexes = [index for index, state in task_states.items() if state == AsyncJobStatus.running.value]
+                if not running_indexes:
+                    continue
+                payloads = [raw_tasks[index] for index in running_indexes if index in raw_tasks]
+                if not payloads:
+                    continue
+                pipe = self.redis.pipeline(transaction=True)
+                for index in running_indexes:
+                    pipe.hset(
+                        self._task_states_key(job_id),
+                        index,
+                        AsyncJobStatus.queued.value,
+                    )
+                pipe.hset(
+                    self._meta_key(job_id),
+                    mapping={
+                        "status": AsyncJobStatus.queued.value,
+                        "running": "0",
+                        "updated_at": _now_iso(),
+                    },
+                )
+                pipe.hincrby(
+                    self._metrics_key(),
+                    METRICS_RUNNING_TASKS_FIELD,
+                    -len(payloads),
+                )
+                pipe.rpush(self.queue_name, *payloads)
+                pipe.expire(self._meta_key(job_id), self.ttl_sec)
+                pipe.expire(self._results_key(job_id), self.ttl_sec)
+                pipe.expire(self._tasks_key(job_id), self.ttl_sec)
+                pipe.expire(self._task_states_key(job_id), self.ttl_sec)
+                await pipe.execute()
+                await self._record_enqueue_count(len(payloads))
+                recovered += len(payloads)
+                logger.warning(
+                    "Recovered async running tasks after worker restart: job_id={} recovered_tasks={}",
+                    job_id,
+                    len(payloads),
+                )
+            if cursor in {0, "0"}:
+                break
+        return recovered
 
     async def close(self) -> None:
         logger.debug("Closing async jobs backend (redis): queue={}", self.queue_name)
@@ -832,6 +966,9 @@ class InMemoryAsyncJobs:
             dequeue_rate=self._dequeue_count / elapsed,
             enqueue_rate=self._enqueue_count / elapsed,
         )
+
+    async def recover_running_tasks(self) -> int:
+        return 0
 
 
 async def create_async_jobs(settings: Settings) -> AsyncJobs:

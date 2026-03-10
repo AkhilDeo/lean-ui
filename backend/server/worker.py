@@ -159,6 +159,9 @@ async def run_worker(settings: Settings | None = None) -> None:
         raise RuntimeError("Worker requires LEAN_SERVER_ASYNC_ENABLED=true")
 
     jobs = await create_async_jobs(cfg)
+    recovered_tasks = await jobs.recover_running_tasks()
+    if recovered_tasks:
+        logger.warning("Recovered async tasks before worker start: {}", recovered_tasks)
     manager = Manager(
         max_repls=cfg.max_repls,
         max_repl_uses=cfg.max_repl_uses,

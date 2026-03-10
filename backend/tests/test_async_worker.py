@@ -95,6 +95,9 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
     started: set[int] = set()
 
     class FakeJobs:
+        async def recover_running_tasks(self) -> int:
+            return 0
+
         async def close(self) -> None:
             return None
 
@@ -150,6 +153,9 @@ async def test_run_worker_uses_configured_concurrency(
     reached_target = asyncio.Event()
 
     class DummyJobs:
+        async def recover_running_tasks(self) -> int:
+            return 0
+
         async def close(self) -> None:
             return None
 
