@@ -7,7 +7,7 @@ from server.manager import Manager
 @pytest.mark.asyncio
 async def test_lazy_lock_initialization() -> None:
     """Test that Lock and Condition are initialized lazily in async context."""
-    manager = Manager(max_repls=1, max_repl_uses=1)
+    manager = Manager(max_repls=1, max_repl_uses=1, max_repl_mem=10, min_host_free_mem=4)
     
     # Initially, lock and condition should be None
     assert manager._lock is None
@@ -25,7 +25,7 @@ async def test_lazy_lock_initialization() -> None:
 
 @pytest.mark.asyncio
 async def test_get_repl() -> None:
-    manager = Manager(max_repls=1, max_repl_uses=1)
+    manager = Manager(max_repls=1, max_repl_uses=1, max_repl_mem=10, min_host_free_mem=4)
 
     repl = await manager.get_repl()
 
@@ -36,7 +36,7 @@ async def test_get_repl() -> None:
 
 @pytest.mark.asyncio
 async def test_exhausted() -> None:
-    manager = Manager(max_repls=0, max_repl_uses=1)
+    manager = Manager(max_repls=0, max_repl_uses=1, max_repl_mem=10, min_host_free_mem=4)
 
     with pytest.raises(NoAvailableReplError):
         await manager.get_repl(timeout=3)
@@ -44,7 +44,7 @@ async def test_exhausted() -> None:
 
 @pytest.mark.asyncio
 async def test_get_repl_with_reuse() -> None:
-    manager = Manager(max_repls=1, max_repl_uses=3)
+    manager = Manager(max_repls=1, max_repl_uses=3, max_repl_mem=10, min_host_free_mem=4)
 
     repl1 = await manager.get_repl()
     assert repl1 is not None
