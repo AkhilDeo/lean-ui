@@ -102,9 +102,6 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
         def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
             _ = kwargs
 
-        async def initialize_repls(self) -> None:
-            return None
-
         async def cleanup(self) -> None:
             return None
 
@@ -135,7 +132,6 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
     settings.async_enabled = True
     settings.max_repls = 4
     settings.async_worker_concurrency = 3
-    settings.init_repls = {}
 
     task = asyncio.create_task(run_worker(settings))
     await asyncio.sleep(0.05)
@@ -158,9 +154,6 @@ async def test_run_worker_uses_configured_concurrency(
             return None
 
     class DummyManager:
-        async def initialize_repls(self) -> None:
-            return None
-
         async def cleanup(self) -> None:
             return None
 
@@ -185,7 +178,6 @@ async def test_run_worker_uses_configured_concurrency(
     cfg.async_enabled = True
     cfg.max_repls = 5
     cfg.async_worker_concurrency = 3
-    cfg.init_repls = {}
 
     task = asyncio.create_task(run_worker(cfg))
     await asyncio.wait_for(reached_target.wait(), timeout=1.0)
@@ -194,61 +186,3 @@ async def test_run_worker_uses_configured_concurrency(
         await task
 
     assert max_inflight >= 3
-
-
-@pytest.mark.asyncio
-async def test_run_worker_prewarms_before_starting_consumers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    events: list[str] = []
-
-    class DummyJobs:
-        async def close(self) -> None:
-            events.append("jobs-close")
-
-    class DummyManager:
-        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
-            _ = kwargs
-
-        async def initialize_repls(self) -> None:
-            events.append("prewarm")
-
-        async def cleanup(self) -> None:
-            events.append("cleanup")
-
-    async def fake_create_async_jobs(_cfg: Settings) -> DummyJobs:
-        return DummyJobs()
-
-    async def fake_consumer_loop(  # type: ignore[no-untyped-def]
-        *,
-        consumer_id: int,
-        jobs,
-        manager,
-        task_timeout_sec: int,
-        worker_retries: int,
-    ) -> None:
-        _ = jobs, manager, task_timeout_sec, worker_retries
-        events.append(f"consumer-{consumer_id}")
-        try:
-            await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            raise
-
-    monkeypatch.setattr("server.worker.create_async_jobs", fake_create_async_jobs)
-    monkeypatch.setattr("server.worker.Manager", DummyManager)
-    monkeypatch.setattr("server.worker._consumer_loop", fake_consumer_loop)
-
-    cfg = Settings(_env_file=None)
-    cfg.async_enabled = True
-    cfg.max_repls = 2
-    cfg.async_worker_concurrency = 2
-    cfg.init_repls = {"import Mathlib": 1}
-
-    task = asyncio.create_task(run_worker(cfg))
-    await asyncio.sleep(0.05)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    assert events[0] == "prewarm"
-    assert events[1:3] == ["consumer-1", "consumer-2"]
