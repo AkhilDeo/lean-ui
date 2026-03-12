@@ -230,11 +230,16 @@ def service_domain(state: dict[str, Any]) -> str:
     return f"https://{domains[0]['domain']}"
 
 
-def internal_service_url(variables: dict[str, str], state: dict[str, Any]) -> str:
+def internal_service_url(
+    *, service_name: str, variables: dict[str, str], state: dict[str, Any]
+) -> str:
     private_domain = variables.get("RAILWAY_PRIVATE_DOMAIN", "").strip()
     if private_domain:
         return f"http://{private_domain}"
-    return service_domain(state)
+    domains = state.get("domains", {}).get("serviceDomains", [])
+    if domains:
+        return f"https://{domains[0]['domain']}"
+    return f"http://{service_name}.railway.internal"
 
 
 def build_gateway_registry(
@@ -382,12 +387,18 @@ def main() -> int:
     gateway_registry = build_gateway_registry(
         gateway_url=gateway_public_url,
         mathlib_v427_url=(
-            internal_service_url(mathlib_v427_vars, mathlib_v427_state)
+            internal_service_url(
+                service_name=args.mathlib_v427_service,
+                variables=mathlib_v427_vars,
+                state=mathlib_v427_state,
+            )
             if mathlib_v427_vars or args.execute
             else f"http://{args.mathlib_v427_service}.railway.internal"
         ),
         formal_conjectures_url=internal_service_url(
-            formal_conjectures_vars, formal_conjectures_state
+            service_name=args.formal_conjectures_service,
+            variables=formal_conjectures_vars,
+            state=formal_conjectures_state,
         )
         if formal_conjectures_vars or args.execute
         else f"http://{args.formal_conjectures_service}.railway.internal",
