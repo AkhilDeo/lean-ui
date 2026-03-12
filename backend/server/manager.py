@@ -24,12 +24,14 @@ class Manager:
         max_repl_mem: int = settings.max_repl_mem,
         init_repls: dict[str, int] = settings.init_repls,
         min_host_free_mem: int = settings.min_host_free_mem,
+        idle_repl_ttl_sec: int = settings.idle_repl_ttl_sec,
     ) -> None:
         self.max_repls = max_repls
         self.max_repl_uses = max_repl_uses
         self.max_repl_mem = max_repl_mem
         self.init_repls = init_repls
         self.min_host_free_mem = min_host_free_mem
+        self.idle_repl_ttl_sec = idle_repl_ttl_sec
 
         self._lock: asyncio.Lock | None = None
         self._cond: asyncio.Condition | None = None
@@ -37,11 +39,12 @@ class Manager:
         self._busy: set[Repl] = set()
 
         logger.info(
-            "REPL manager initialized with: MAX_REPLS={}, MAX_REPL_USES={}, MAX_REPL_MEM={} MB, MIN_HOST_FREE_MEM={} MB",
+            "REPL manager initialized with: MAX_REPLS={}, MAX_REPL_USES={}, MAX_REPL_MEM={} MB, MIN_HOST_FREE_MEM={} MB, IDLE_REPL_TTL_SEC={}",
             max_repls,
             max_repl_uses,
             max_repl_mem,
             min_host_free_mem,
+            idle_repl_ttl_sec,
         )
 
     def _has_memory_headroom(self) -> bool:
@@ -101,6 +104,9 @@ class Manager:
         repl_to_destroy: Repl | None = None
         while True:
             async with self._cond:
+                expired_free = self._take_expired_free_repls_locked()
+                for repl in expired_free:
+                    asyncio.create_task(close_verbose(repl))
                 logger.debug(
                     f"# Free = {len(self._free)} | # Busy = {len(self._busy)} | # Max = {self.max_repls}"
                 )
@@ -225,6 +231,33 @@ class Manager:
 
             logger.info("REPL manager cleaned up!")
         pass
+
+    def _take_expired_free_repls_locked(self) -> list[Repl]:
+        if self.idle_repl_ttl_sec <= 0:
+            return []
+
+        now = datetime.now()
+        expired: list[Repl] = []
+        keep: list[Repl] = []
+        for repl in self._free:
+            idle_seconds = (now - repl.last_check_at).total_seconds()
+            if idle_seconds >= self.idle_repl_ttl_sec:
+                expired.append(repl)
+            else:
+                keep.append(repl)
+        self._free = keep
+        return expired
+
+    async def reap_idle_repls(self) -> int:
+        self._ensure_lock()
+        assert self._cond is not None
+        async with self._cond:
+            expired = self._take_expired_free_repls_locked()
+            if expired:
+                self._cond.notify_all()
+        for repl in expired:
+            asyncio.create_task(close_verbose(repl))
+        return len(expired)
 
     async def prep(
         self, repl: Repl, snippet_id: str, timeout: float, debug: bool

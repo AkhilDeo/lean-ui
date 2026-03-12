@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import type { KiminaResponse, VerificationEnvironment } from '@/types/verification';
+
 const KIMINA_LEAN_SERVER_URL = process.env.KIMINA_SERVER_URL || 'http://localhost:10000';
 
 export async function POST(request: NextRequest) {
+  let requestedEnvironment: VerificationEnvironment | undefined;
   try {
-    const { code } = await request.json();
+    const { code, environment } = (await request.json()) as {
+      code?: string;
+      environment?: VerificationEnvironment;
+    };
+    requestedEnvironment = environment;
 
     if (!code || typeof code !== 'string') {
       return NextResponse.json(
@@ -32,26 +39,37 @@ export async function POST(request: NextRequest) {
         snippets: [
           {
             id: 'verification',
-            code: code,
+            code,
           },
         ],
         reuse: false,
+        environment,
       }),
       signal: AbortSignal.timeout(30000),
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
+      let errorText = await response.text();
+      try {
+        const errorJson = JSON.parse(errorText) as { detail?: string };
+        errorText = errorJson.detail || errorText;
+      } catch {
+        // Ignore non-JSON error bodies from the upstream service.
+      }
       return NextResponse.json(
-        { 
-          pass: false, 
+        {
+          pass: false,
           error: `Server error: ${response.status} - ${errorText}`,
-        },
+          requestedEnvironment,
+        } satisfies KiminaResponse,
         { status: 200 }
       );
     }
 
     const result = await response.json();
+    const resolvedEnvironmentId = response.headers.get('x-lean-environment-id') || undefined;
+    const resolvedLeanVersion = response.headers.get('x-lean-version') || undefined;
+    const resolvedProjectLabel = response.headers.get('x-lean-project-label') || undefined;
     
     // Parse the kimina-lean-server response format
     // Response format: { results: [{ id, time, response: { env, messages: [{severity, pos, endPos, data}] } }] }
@@ -81,16 +99,21 @@ export async function POST(request: NextRequest) {
       
       return NextResponse.json({
         pass,
-        error: errors.length > 0 ? errors.join('\n') : null,
+        error: errors.length > 0 ? errors.join('\n') : undefined,
         warnings,
         infos,
         time: firstResult.time,
-      });
+        requestedEnvironment,
+        resolvedEnvironmentId,
+        resolvedLeanVersion,
+        resolvedProjectLabel,
+      } satisfies KiminaResponse);
     }
 
     return NextResponse.json({
       pass: false,
       error: 'No results returned from server',
+      requestedEnvironment,
     });
   } catch (error) {
     console.error('Verification error:', error);
@@ -108,9 +131,10 @@ export async function POST(request: NextRequest) {
     }
     
     return NextResponse.json(
-      { 
-        pass: false, 
+      {
+        pass: false,
         error: errorMessage,
+        requestedEnvironment,
       },
       { status: 200 }
     );

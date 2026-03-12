@@ -47,10 +47,19 @@ python backend/scripts/verify_async_redis_health.py \
 
 ```bash
 python backend/scripts/railway_tune_prod_capacity.py
+
+# Multi-environment gateway service configuration (dry-run)
+python backend/scripts/railway_configure_multi_env.py
+
+# The dry-run plan includes internal checker URLs, gateway validation URLs,
+# and the pinned FormalConjectures commit used for the v4.27 service.
 ```
 
 ## Railway Tuning (Apply)
 
 ```bash
 python backend/scripts/railway_tune_prod_capacity.py --execute --apply-limits
+
+# Apply gateway + checker environment metadata / idle TTL settings
+python backend/scripts/railway_configure_multi_env.py --execute --apply-limits
 ```

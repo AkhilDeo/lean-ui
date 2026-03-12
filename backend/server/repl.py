@@ -210,6 +210,7 @@ class Repl:
         timeout: float,
         is_header: bool = False,
         infotree: Infotree | None = None,
+        include_sorry_details: bool = False,
     ) -> ReplResponse:
         cmd_response = None
         elapsed_time = (
@@ -219,7 +220,12 @@ class Repl:
 
         try:
             cmd_response, elapsed_time, diagnostics = await asyncio.wait_for(
-                self.send(snippet, is_header=is_header, infotree=infotree),
+                self.send(
+                    snippet,
+                    is_header=is_header,
+                    infotree=infotree,
+                    include_sorry_details=include_sorry_details,
+                ),
                 timeout=timeout,
             )
         except TimeoutError as e:
@@ -248,6 +254,7 @@ class Repl:
         snippet: Snippet,
         is_header: bool = False,
         infotree: Infotree | None = None,
+        include_sorry_details: bool = False,
     ) -> tuple[CommandResponse | Error, float, Diagnostics]:
         await log_snippet(self.uuid, snippet.id, snippet.code)
 
@@ -273,6 +280,8 @@ class Repl:
 
         if infotree:
             input["infotree"] = infotree
+        if include_sorry_details:
+            input["include_sorry_details"] = True
 
         payload = (json.dumps(input, ensure_ascii=False) + "\n\n").encode("utf-8")
 

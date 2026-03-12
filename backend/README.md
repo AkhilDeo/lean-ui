@@ -86,6 +86,33 @@ curl --request POST \
 }' | jq
 ```
 
+Request rich `sorry` details explicitly when you want hole-level proof state:
+
+```sh
+curl --request POST \
+  --url http://localhost/api/check \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "snippets": [
+      {
+        "id": "sorry-details",
+        "code": "theorem foo (x : Int) : x = x := by sorry"
+      }
+    ],
+    "include_sorry_details": true
+  }' | jq
+```
+
+When `include_sorry_details` is enabled and Lean returns `status = sorry`, each
+`sorries[]` entry includes:
+
+- `line`, `column`, `endLine`, `endColumn`
+- `pos`, `endPos`
+- `goal`
+- `localContext`
+- `proofState`
+- `proofStateId`
+
 Or use the client below.
 
 ## Client
@@ -113,18 +140,73 @@ Or from source with `pip install -e .`
 | `LEAN_SERVER_LOG_LEVEL`               | `INFO`        | Logging level (`DEBUG`, `INFO`, `ERROR`, etc.)         |
 | `LEAN_SERVER_ENVIRONMENT`             | `dev`         | Environment `dev` or `prod`                            |
 | `LEAN_SERVER_LEAN_VERSION`            | `v4.15.0`     | Lean version                                           |
+| `LEAN_SERVER_ENVIRONMENT_ID`          | `mathlib-v4.15` | Environment identifier reported by `/health` and response metadata |
+| `LEAN_SERVER_PROJECT_LABEL`           | `Mathlib`     | Human-readable project label                           |
+| `LEAN_SERVER_PROJECT_TYPE`            | `mathlib`     | Project family for metadata / routing                  |
 | `LEAN_SERVER_MAX_REPLS`               | CPU count - 1 | Maximum number of REPLs                                |
 | `LEAN_SERVER_MAX_REPL_USES`           | `-1`          | Maximum number of uses per REPL (-1 is no limit)       |
 | `LEAN_SERVER_MAX_REPL_MEM`            | `8G`          | Maximum memory limit for each REPL (Linux-only)        |
 | `LEAN_SERVER_MAX_WAIT`                | `60`          | Maximum wait time to wait for a REPL (in seconds)      |
+| `LEAN_SERVER_IDLE_REPL_TTL_SEC`       | `0`           | Idle lifetime for free REPLs before deallocation       |
 | `LEAN_SERVER_INIT_REPLS`              | `{}`          | Map of header to REPL count to initialize with         |
 | `LEAN_SERVER_API_KEY`                 | `None`        | Optional API key for authentication                    |
 | `LEAN_SERVER_REPL_PATH`               | `repl/.lake/build/bin/repl` | Path to REPL directory, relative to workspace    |
 | `LEAN_SERVER_PROJECT_DIR`             | `mathlib4`    | Path to Lean 4 project directory, relative to workspace        |
+| `LEAN_SERVER_GATEWAY_DEFAULT_ENVIRONMENT` | `mathlib-v4.15` | Default environment used when request omits `environment` |
+| `LEAN_SERVER_GATEWAY_ENVIRONMENTS`    | `[]`          | JSON registry of routable environments for the public gateway |
+| `LEAN_SERVER_GATEWAY_INTERNAL_API_KEY` | `None`       | Bearer token used by the gateway when proxying to other services |
 | `LEAN_SERVER_DATABASE_URL`            |               | URL for the database (if using one)                   |
 
 `LEAN_SERVER_MAX_REPL_MEM` can help avoid certain OOM issues (see Issue #25)
 The server also runs all commands with `"gc": true` to automatically discard environments which helps limit memory usage.
+
+
+## Multi-Environment Gateway
+
+The public gateway can route requests across multiple dedicated Lean services.
+
+- `POST /api/check` now accepts optional `environment`
+- `POST /verify` and `POST /one_pass_verify_batch` accept optional `environment`
+- `POST /api/async/check` accepts optional `environment`
+- `GET /api/environments` returns the supported environments and the default
+- `GET /api/environments/health` validates the deployed checker metadata through the gateway
+- Omitting `environment` preserves the current default `mathlib-v4.15`
+- `environment=auto` routes `FormalConjectures.*` imports to `formal-conjectures-v4.27`
+- Async submit responses return gateway-scoped job ids like `mathlib-v4.27:<job_id>`
+- `GET /api/async/metrics?include_environments=true` returns aggregate queue totals plus per-environment breakdown
+
+Example raw API request:
+
+```sh
+curl --request POST \
+  --url http://localhost:8000/api/check \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "snippets": [
+      {
+        "id": "fc-import",
+        "code": "import FormalConjectures.Util.ProblemImports\n#check Nat"
+      }
+    ],
+    "environment": "auto"
+  }'
+```
+
+The gateway also returns resolved metadata headers:
+
+- `X-Lean-Environment-ID`
+- `X-Lean-Version`
+- `X-Lean-Project-Label`
+
+And each `diagnostics` payload includes the same resolved environment metadata.
+
+The recommended Railway deployment uses:
+
+- one public gateway/default `mathlib-v4.15` service
+- one private `mathlib-v4.27` checker service
+- one private `formal-conjectures-v4.27` checker service
+
+`backend/scripts/railway_configure_multi_env.py` now emits internal checker URLs, a public gateway validation plan, and pins FormalConjectures to commit `c18e2336abba12b96b75c0ea4a894342a64037bb`.
 
 
 
@@ -249,4 +331,3 @@ You are free to use, modify, and distribute this software with proper attributio
       url={https://arxiv.org/abs/2504.21230}, 
 }
 ```
-

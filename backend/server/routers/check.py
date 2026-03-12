@@ -2,14 +2,21 @@ import asyncio
 import json
 from typing import TypeVar, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from kimina_client import CheckRequest, Infotree, ReplResponse, Snippet
 from kimina_client.models import CheckResponse, CommandResponse, Pos
 from loguru import logger
 
 from ..auth import require_key
 from ..db import db
+from ..environment_registry import (
+    LeanEnvironmentInfo,
+    add_environment_metadata_to_diagnostics,
+    environment_headers,
+    resolve_environment_selection,
+)
 from ..errors import NoAvailableReplError
+from ..gateway_proxy import proxy_check_request
 from ..manager import Manager
 from ..prisma_client import prisma
 from ..request_policy import normalize_check_request
@@ -40,6 +47,53 @@ def _shift_line(pos: Pos | None, offset: int) -> None:
     pos["line"] = line + offset
 
 
+def _shift_scalar_line(value: int | None, offset: int) -> int | None:
+    if value is None:
+        return None
+    return value + offset
+
+
+def _validate_rich_sorry_details(response: ReplResponse) -> None:
+    if response.error is not None or response.response is None:
+        return
+    if "message" in response.response:
+        return
+
+    sorries = response.response.get("sorries")
+    if not sorries:
+        return
+
+    required_fields = ("line", "column", "endLine", "endColumn", "goal", "localContext")
+    for index, sorry in enumerate(sorries):
+        missing = [
+            field
+            for field in required_fields
+            if field not in sorry or sorry.get(field) is None
+        ]
+        goal = sorry.get("goal")
+        if not missing and (not isinstance(goal, str) or goal == ""):
+            missing = ["goal"]
+        proof_state = sorry.get("proofState")
+        proof_state_id = sorry.get("proofStateId")
+        if missing or not isinstance(proof_state, str) or proof_state == "":
+            detail = ", ".join(missing) if missing else "proofState"
+            raise HTTPException(
+                500,
+                (
+                    f"Rich sorry details contract violated for snippet '{response.id}' "
+                    f"at index {index}: missing or invalid {detail}"
+                ),
+            )
+        if proof_state_id is not None and not isinstance(proof_state_id, int):
+            raise HTTPException(
+                500,
+                (
+                    f"Rich sorry details contract violated for snippet '{response.id}' "
+                    f"at index {index}: invalid proofStateId"
+                ),
+            )
+
+
 def _apply_header_offset(response: ReplResponse, offset: int) -> None:
     if offset <= 0 or response.error is not None:
         return
@@ -51,13 +105,12 @@ def _apply_header_offset(response: ReplResponse, offset: int) -> None:
     command_response = cast(CommandResponse, payload)
 
     messages = command_response.get("messages")
-    if not messages:
-        return
-    for message in messages:
-        pos = message.get("pos")
-        _shift_line(pos, offset)
-        end_pos = message.get("endPos")
-        _shift_line(end_pos, offset)
+    if messages:
+        for message in messages:
+            pos = message.get("pos")
+            _shift_line(pos, offset)
+            end_pos = message.get("endPos")
+            _shift_line(end_pos, offset)
 
     sorries = command_response.get("sorries")
     if not sorries:
@@ -67,6 +120,12 @@ def _apply_header_offset(response: ReplResponse, offset: int) -> None:
         _shift_line(pos, offset)
         end_pos = sorry.get("endPos")
         _shift_line(end_pos, offset)
+        line = _shift_scalar_line(cast(int | None, sorry.get("line")), offset)
+        if line is not None:
+            sorry["line"] = line
+        end_line = _shift_scalar_line(cast(int | None, sorry.get("endLine")), offset)
+        if end_line is not None:
+            sorry["endLine"] = end_line
 
 
 def _log_body_response(repl: Repl, snippet_id: str, response: ReplResponse) -> None:
@@ -76,6 +135,22 @@ def _log_body_response(repl: Repl, snippet_id: str, response: ReplResponse) -> N
         snippet_id,
         lambda: json.dumps(response.model_dump(exclude_none=True), indent=2),
     )
+
+
+def _apply_environment_metadata(
+    responses: list[ReplResponse], environment: LeanEnvironmentInfo
+) -> list[ReplResponse]:
+    for response in responses:
+        response.diagnostics = add_environment_metadata_to_diagnostics(
+            cast(dict[str, object] | None, response.diagnostics),
+            environment,
+        )
+    return responses
+
+
+def _set_environment_headers(response: Response, environment: LeanEnvironmentInfo) -> None:
+    for key, value in environment_headers(environment).items():
+        response.headers[key] = value
 
 
 async def wait_for_task_or_disconnect(
@@ -104,6 +179,7 @@ async def run_checks(
     manager: Manager,
     reuse: bool,
     infotree: Infotree | None = None,
+    include_sorry_details: bool = False,
 ) -> list[ReplResponse]:
     async def run_one(snippet: Snippet) -> ReplResponse:
         repl: Repl | None = None
@@ -157,9 +233,14 @@ async def run_checks(
 
             try:
                 resp = await repl.send_timeout(
-                    Snippet(id=snippet.id, code=body), timeout, infotree=infotree
+                    Snippet(id=snippet.id, code=body),
+                    timeout,
+                    infotree=infotree,
+                    include_sorry_details=include_sorry_details,
                 )
                 _apply_header_offset(resp, header_line_count)
+                if include_sorry_details:
+                    _validate_rich_sorry_details(resp)
             except TimeoutError:
                 error = f"Lean REPL command timed out in {timeout} seconds"
                 uuid_hex = repl.uuid.hex
@@ -238,11 +319,28 @@ async def run_checks(
 async def check(
     request: CheckRequest,
     raw_request: Request,
+    raw_response: Response,
     manager: Manager = Depends(get_manager),
     runtime_settings: Settings = Depends(get_runtime_settings),
     _: str = Depends(require_key),
 ) -> CheckResponse:
     normalized_request = normalize_check_request(request, runtime_settings)
+    selection = resolve_environment_selection(
+        requested_environment=normalized_request.environment,
+        snippets=normalized_request.snippets,
+        settings=runtime_settings,
+    )
+    resolved_environment = selection.resolved_environment
+    _set_environment_headers(raw_response, resolved_environment)
+
+    if resolved_environment.id != runtime_settings.environment_id:
+        proxied = await proxy_check_request(
+            request=normalized_request,
+            target_environment=resolved_environment,
+            settings=runtime_settings,
+        )
+        proxied.results = _apply_environment_metadata(proxied.results, resolved_environment)
+        return proxied
 
     task = asyncio.create_task(
         run_checks(
@@ -252,7 +350,8 @@ async def check(
             manager,
             normalized_request.reuse,
             normalized_request.infotree,
+            normalized_request.include_sorry_details,
         )
     )
     results = await wait_for_task_or_disconnect(task, raw_request)
-    return CheckResponse(results=results)
+    return CheckResponse(results=_apply_environment_metadata(results, resolved_environment))

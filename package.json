@@ -4,9 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/ensure-lightningcss.js",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "verify:frontend": "npm run build"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

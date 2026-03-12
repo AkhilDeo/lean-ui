@@ -6,10 +6,13 @@ import { CodeEditor } from './CodeEditor';
 import { VerificationPanel } from './VerificationPanel';
 import { HistorySidebar } from './HistorySidebar';
 import { useVerificationHistory } from '@/hooks/useVerificationHistory';
-import { VerificationResult } from '@/types/verification';
+import {
+  EnvironmentsResponse,
+  VerificationEnvironment,
+  VerificationResult,
+} from '@/types/verification';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Separator } from '@/components/ui/separator';
 import {
   Dialog,
   DialogContent,
@@ -21,12 +24,48 @@ import {
 import { Play, Loader2, Code2, Sparkles } from 'lucide-react';
 import { generateRandomName } from '@/lib/nameGenerator';
 
-const DEFAULT_CODE = `-- Welcome to Lean 4.15 Verifier!
--- Write your Lean code below and click "Verify" to check it.
+const DEFAULT_CODE = `-- Welcome to the Lean Verifier!
+-- Choose an environment or keep Auto, then click "Verify".
 
 theorem hello_world : 1 + 1 = 2 := by
   rfl
 `;
+
+const DEFAULT_ENVIRONMENTS: EnvironmentsResponse = {
+  default_environment: 'mathlib-v4.15',
+  environments: [
+    {
+      id: 'mathlib-v4.15',
+      display_name: 'Mathlib 4.15',
+      lean_version: 'v4.15.0',
+      project_label: 'Mathlib',
+      project_type: 'mathlib',
+      selectable: true,
+      auto_routable: true,
+      is_default: true,
+    },
+    {
+      id: 'mathlib-v4.27',
+      display_name: 'Mathlib 4.27',
+      lean_version: 'v4.27.0',
+      project_label: 'Mathlib',
+      project_type: 'mathlib',
+      selectable: true,
+      auto_routable: true,
+      is_default: false,
+    },
+    {
+      id: 'formal-conjectures-v4.27',
+      display_name: 'Formal Conjectures 4.27',
+      lean_version: 'v4.27.0',
+      project_label: 'FormalConjectures',
+      project_type: 'formal-conjectures',
+      selectable: true,
+      auto_routable: true,
+      is_default: false,
+    },
+  ],
+};
 
 export function LeanVerifier() {
   const [code, setCode] = useState(DEFAULT_CODE);
@@ -37,6 +76,8 @@ export function LeanVerifier() {
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [isResizing, setIsResizing] = useState(false);
+  const [selectedEnvironment, setSelectedEnvironment] = useState<VerificationEnvironment>('auto');
+  const [environmentData, setEnvironmentData] = useState<EnvironmentsResponse>(DEFAULT_ENVIRONMENTS);
   const resizeRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -64,7 +105,10 @@ export function LeanVerifier() {
       errors: [],
       warnings: [],
       timestamp: new Date(),
-      leanVersion: '4.15',
+      leanVersion: selectedEnvironment === 'mathlib-v4.27' || selectedEnvironment === 'formal-conjectures-v4.27' ? '4.27' : '4.15',
+      requestedEnvironment: selectedEnvironment,
+      resolvedEnvironmentId: selectedEnvironment === 'auto' ? environmentData.default_environment : selectedEnvironment,
+      resolvedProjectLabel: selectedEnvironment === 'formal-conjectures-v4.27' ? 'FormalConjectures' : 'Mathlib',
     };
 
     addVerification(newVerification);
@@ -76,7 +120,7 @@ export function LeanVerifier() {
       const response = await fetch('/api/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, environment: selectedEnvironment }),
       });
 
       const result = await response.json();
@@ -108,6 +152,10 @@ export function LeanVerifier() {
         status,
         errors,
         warnings,
+        leanVersion: result.resolvedLeanVersion?.replace(/^v/, '').replace(/\.0$/, '') || newVerification.leanVersion,
+        requestedEnvironment: result.requestedEnvironment || selectedEnvironment,
+        resolvedEnvironmentId: result.resolvedEnvironmentId || newVerification.resolvedEnvironmentId,
+        resolvedProjectLabel: result.resolvedProjectLabel || newVerification.resolvedProjectLabel,
       };
 
       updateVerification(id, updatedResult);
@@ -123,7 +171,7 @@ export function LeanVerifier() {
     } finally {
       setIsVerifying(false);
     }
-  }, [code, title, history.length, addVerification, updateVerification]);
+  }, [code, title, selectedEnvironment, environmentData.default_environment, addVerification, updateVerification]);
 
   const handleSelectHistory = useCallback(
     (id: string) => {
@@ -132,6 +180,7 @@ export function LeanVerifier() {
         setSelectedId(id);
         setCode(verification.code);
         setCurrentResult(verification);
+        setSelectedEnvironment(verification.requestedEnvironment || 'auto');
       }
     },
     [getVerification]
@@ -177,8 +226,24 @@ export function LeanVerifier() {
       setCode(latest.code);
       setTitle(latest.title);
       setCurrentResult(latest);
+      setSelectedEnvironment(latest.requestedEnvironment || 'auto');
     }
   }, [isLoaded, history, selectedId]);
+
+  useEffect(() => {
+    const loadEnvironments = async () => {
+      try {
+        const response = await fetch('/api/environments');
+        if (!response.ok) return;
+        const data = (await response.json()) as EnvironmentsResponse;
+        setEnvironmentData(data);
+      } catch (error) {
+        console.error('Failed to load environments:', error);
+      }
+    };
+
+    void loadEnvironments();
+  }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -247,11 +312,23 @@ export function LeanVerifier() {
               <Code2 className="h-5 w-5 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-lg font-bold">Lean 4.15 Verifier</h1>
-              <p className="text-xs text-muted-foreground">Powered by kimina-lean-server</p>
+              <h1 className="text-lg font-bold">Lean Environment Gateway</h1>
+              <p className="text-xs text-muted-foreground">Gateway-backed multi-environment verification</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <select
+              value={selectedEnvironment}
+              onChange={(e) => setSelectedEnvironment(e.target.value as VerificationEnvironment)}
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="auto">Auto</option>
+              {environmentData.environments.map((environment) => (
+                <option key={environment.id} value={environment.id}>
+                  {environment.display_name}
+                </option>
+              ))}
+            </select>
             <Input
               placeholder="Verification title (optional)"
               value={title}

@@ -56,6 +56,7 @@ async def process_task(
                     manager=manager,
                     reuse=task.reuse,
                     infotree=task.infotree,
+                    include_sorry_details=task.include_sorry_details,
                 )
                 await jobs.mark_task_success(task, responses[0])
                 logger.debug(

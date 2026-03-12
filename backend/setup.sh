@@ -10,8 +10,11 @@ fi
 LEAN_SERVER_LEAN_VERSION="${LEAN_SERVER_LEAN_VERSION:-v4.15.0}"
 REPL_REPO_URL="${REPL_REPO_URL:-https://github.com/leanprover-community/repl.git}"
 REPL_BRANCH="${REPL_BRANCH:-$LEAN_SERVER_LEAN_VERSION}"
-MATHLIB_REPO_URL="${MATHLIB_REPO_URL:-https://github.com/leanprover-community/mathlib4.git}"
-MATHLIB_BRANCH="${MATHLIB_BRANCH:-$LEAN_SERVER_LEAN_VERSION}"
+LEAN_PROJECT_NAME="${LEAN_PROJECT_NAME:-mathlib4}"
+LEAN_PROJECT_REPO_URL="${LEAN_PROJECT_REPO_URL:-${MATHLIB_REPO_URL:-https://github.com/leanprover-community/mathlib4.git}}"
+LEAN_PROJECT_REF="${LEAN_PROJECT_REF:-${MATHLIB_BRANCH:-$LEAN_SERVER_LEAN_VERSION}}"
+LEAN_PROJECT_CACHE_CMD="${LEAN_PROJECT_CACHE_CMD:-lake exe cache get}"
+LEAN_PROJECT_UPDATE_MANIFEST="${LEAN_PROJECT_UPDATE_MANIFEST:-true}"
 
 command -v curl >/dev/null 2>&1 || { echo >&2 "curl is required"; exit 1; }
 command -v git  >/dev/null 2>&1 || { echo >&2 "git is required";  exit 1; }
@@ -41,15 +44,15 @@ version_lte() {
 }
 
 install_repo() {
-  local name="$1" url="$2" branch="$3" upd_manifest="$4"
+  local name="$1" url="$2" branch="$3" upd_manifest="$4" cache_cmd="$5"
   echo "Installing ${name}@${branch}..."
   if [ ! -d "$name" ]; then
     git clone --branch "${branch}" --single-branch --depth 1 "$url" "$name"
   fi
   pushd "$name"
     git checkout "${branch}"
-    if [ "$name" = "mathlib4" ]; then
-      lake exe cache get
+    if [ -n "$cache_cmd" ]; then
+      bash -lc "$cache_cmd"
     fi
     lake build
     if [ "$upd_manifest" = "true" ]; then
@@ -59,7 +62,7 @@ install_repo() {
   popd
 }
 
-install_repo repl "$REPL_REPO_URL" "$REPL_BRANCH" false
+install_repo repl "$REPL_REPO_URL" "$REPL_BRANCH" false ""
 
 # Cherry-pick EOL flush commit for v4.9.0 and under.
 if version_lte "$REPL_BRANCH" "v4.9.0"; then
@@ -71,4 +74,9 @@ if version_lte "$REPL_BRANCH" "v4.9.0"; then
   popd
 fi
 
-install_repo mathlib4 "$MATHLIB_REPO_URL" "$MATHLIB_BRANCH" true
+install_repo \
+  "$LEAN_PROJECT_NAME" \
+  "$LEAN_PROJECT_REPO_URL" \
+  "$LEAN_PROJECT_REF" \
+  "$LEAN_PROJECT_UPDATE_MANIFEST" \
+  "$LEAN_PROJECT_CACHE_CMD"

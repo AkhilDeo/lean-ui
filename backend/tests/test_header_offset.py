@@ -58,3 +58,34 @@ def test_apply_header_offset_ignores_zero_offset() -> None:
     assert response.response is not None
     message = response.response.get("messages")[0]
     assert message["pos"]["line"] == 2
+
+
+def test_apply_header_offset_updates_flat_sorry_coordinates() -> None:
+    response = ReplResponse(
+        id="snippet",
+        response={
+            "sorries": [
+                {
+                    "line": 1,
+                    "column": 0,
+                    "endLine": 1,
+                    "endColumn": 5,
+                    "pos": {"line": 1, "column": 0},
+                    "endPos": {"line": 1, "column": 5},
+                    "goal": "⊢ Nat",
+                    "localContext": "",
+                    "proofState": "⊢ Nat",
+                }
+            ],
+        },
+    )
+
+    _apply_header_offset(response, 3)
+
+    assert response.response is not None
+    sorries = response.response.get("sorries")
+    assert sorries is not None
+    assert sorries[0]["line"] == 4
+    assert sorries[0]["endLine"] == 4
+    assert sorries[0]["pos"]["line"] == 4
+    assert sorries[0]["endPos"]["line"] == 4

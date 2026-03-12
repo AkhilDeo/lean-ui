@@ -5,27 +5,37 @@ import { VerificationResult } from '@/types/verification';
 
 const STORAGE_KEY = 'lean-verification-history';
 
-export function useVerificationHistory() {
-  const [history, setHistory] = useState<VerificationResult[]>([]);
-  const [isLoaded, setIsLoaded] = useState(false);
+const LEGACY_ENVIRONMENT = {
+  requestedEnvironment: 'auto' as const,
+  resolvedEnvironmentId: 'mathlib-v4.15',
+  resolvedProjectLabel: 'Mathlib',
+  leanVersion: '4.15',
+};
 
-  useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        const withDates = parsed.map((item: VerificationResult) => ({
-          ...item,
-          timestamp: new Date(item.timestamp),
-        }));
-        setHistory(withDates);
-      } catch (e) {
-        console.error('Failed to parse history:', e);
-        setHistory([]);
-      }
+export function useVerificationHistory() {
+  const [history, setHistory] = useState<VerificationResult[]>(() => {
+    if (typeof window === 'undefined') {
+      return [];
     }
-    setIsLoaded(true);
-  }, []);
+
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (!stored) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(stored);
+      return parsed.map((item: VerificationResult) => ({
+        ...LEGACY_ENVIRONMENT,
+        ...item,
+        timestamp: new Date(item.timestamp),
+      }));
+    } catch (e) {
+      console.error('Failed to parse history:', e);
+      return [];
+    }
+  });
+  const isLoaded = true;
 
   useEffect(() => {
     if (isLoaded) {

@@ -96,6 +96,66 @@ async def test_single_snippet(client: TestClient) -> None:
 @pytest.mark.parametrize(
     "client",
     [
+        {"init_repls": {}, "database_url": None},
+    ],
+    indirect=True,
+)
+async def test_check_returns_rich_sorry_details_when_requested(
+    client: TestClient,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    async def fake_run_checks(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return [
+            ReplResponse(
+                id=uuid,
+                time=0.1,
+                response={
+                    "env": 0,
+                    "sorries": [
+                        {
+                            "line": 1,
+                            "column": 36,
+                            "endLine": 1,
+                            "endColumn": 41,
+                            "pos": {"line": 1, "column": 36},
+                            "endPos": {"line": 1, "column": 41},
+                            "goal": "⊢ x = x",
+                            "localContext": "x : Int",
+                            "proofState": "x : Int\n⊢ x = x",
+                            "proofStateId": 2,
+                        }
+                    ],
+                },
+            )
+        ]
+
+    uuid = str(uuid4())
+    monkeypatch.setattr("server.routers.check.run_checks", fake_run_checks)
+    payload = CheckRequest(
+        snippets=[Snippet(id=uuid, code="theorem foo (x : Int) : x = x := by sorry")],
+        include_sorry_details=True,
+    ).model_dump()
+    resp = client.post("check", json=payload)
+
+    assert resp.status_code == status.HTTP_200_OK
+    body = resp.json()
+    sorry = body["results"][0]["response"]["sorries"][0]
+    assert sorry["line"] == sorry["pos"]["line"]
+    assert sorry["column"] == sorry["pos"]["column"]
+    assert sorry["endLine"] == sorry["endPos"]["line"]
+    assert sorry["endColumn"] == sorry["endPos"]["column"]
+    assert sorry["line"] > 0
+    assert sorry["endColumn"] > sorry["column"]
+    assert sorry["goal"] == "⊢ x = x"
+    assert sorry["localContext"] == "x : Int"
+    assert sorry["proofState"] == "x : Int\n⊢ x = x"
+    assert isinstance(sorry["proofStateId"], int)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client",
+    [
         {
             "max_repls": 1,
             "max_repl_uses": 3,

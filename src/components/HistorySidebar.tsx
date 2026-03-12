@@ -109,6 +109,9 @@ export function HistorySidebar({
                       <p className="text-xs text-muted-foreground/60">
                         {formatTime(item.timestamp)}
                       </p>
+                      <Badge variant="outline" className="text-[10px]">
+                        {item.resolvedEnvironmentId}
+                      </Badge>
                     </div>
                   </div>
                   <Button
