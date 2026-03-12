@@ -47,9 +47,16 @@ install_repo() {
   local name="$1" url="$2" branch="$3" upd_manifest="$4" cache_cmd="$5"
   echo "Installing ${name}@${branch}..."
   if [ ! -d "$name" ]; then
-    git clone --branch "${branch}" --single-branch --depth 1 "$url" "$name"
+    if [[ "$branch" =~ ^[0-9a-f]{40}$ ]]; then
+      git clone --depth 1 "$url" "$name"
+    else
+      git clone --branch "${branch}" --single-branch --depth 1 "$url" "$name"
+    fi
   fi
   pushd "$name"
+    if [[ "$branch" =~ ^[0-9a-f]{40}$ ]]; then
+      git fetch --depth 1 origin "$branch"
+    fi
     git checkout "${branch}"
     if [ -n "$cache_cmd" ]; then
       bash -lc "$cache_cmd"
