@@ -235,8 +235,8 @@ class Manager:
         try:
             await repl.start()
         except Exception as e:
-            logger.exception("Failed to start REPL: %s", e)
-            raise ReplError("Failed to start REPL") from e
+            logger.exception("Failed to start REPL: {}", e)
+            raise ReplError(f"Failed to start REPL: {e}") from e
 
         if not is_blank(repl.header):
             try:
@@ -249,8 +249,8 @@ class Manager:
                 logger.error("Header command timed out")
                 raise e
             except Exception as e:
-                logger.error("Failed to run header on REPL")
-                raise ReplError("Failed to run header on REPL") from e
+                logger.error("Failed to run header on REPL: {}", e)
+                raise ReplError(f"Failed to run header on REPL: {e}") from e
 
             if not debug:
                 cmd_response.diagnostics = None

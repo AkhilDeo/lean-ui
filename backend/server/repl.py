@@ -3,7 +3,6 @@ import json
 import os
 import platform
 import signal
-import tempfile
 from asyncio.subprocess import Process
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -74,11 +73,12 @@ class Repl:
         self.header_cmd_response: ReplResponse | None = None
 
         self.proc: Process | None = None
-        self.error_file = tempfile.TemporaryFile("w+")
         self.max_memory_bytes = max_repl_mem * 1024 * 1024
         self.max_repl_uses = max_repl_uses
 
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._stderr_chunks: list[bytes] = []
+        self._stderr_task: asyncio.Task[None] | None = None
 
         # REPL statistics
         self.cpu_per_exec: dict[int, float] = {}
@@ -129,6 +129,7 @@ class Repl:
     async def start(self) -> None:
         # TODO: try/catch this bit and raise as REPL startup error.
         self._loop = asyncio.get_running_loop()
+        self._stderr_chunks.clear()
 
         def _preexec() -> None:
             import resource
@@ -166,8 +167,41 @@ class Repl:
         self._mem_max = 0
         self._cpu_task = self._loop.create_task(self._cpu_monitor())
         self._mem_task = self._loop.create_task(self._mem_monitor())
+        self._stderr_task = self._loop.create_task(self._stderr_monitor())
 
         logger.debug(f"\\[{self.uuid.hex[:8]}] Started")
+
+    async def _stderr_monitor(self) -> None:
+        if not self.proc or self.proc.stderr is None:
+            return
+        try:
+            while True:
+                chunk = await self.proc.stderr.read(4096)
+                if not chunk:
+                    break
+                self._stderr_chunks.append(chunk)
+                total = sum(len(part) for part in self._stderr_chunks)
+                while total > 16_384 and self._stderr_chunks:
+                    total -= len(self._stderr_chunks[0])
+                    self._stderr_chunks.pop(0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("Failed to read REPL stderr: {}", exc)
+
+    def _stderr_text(self) -> str:
+        return b"".join(self._stderr_chunks).decode("utf-8", "replace").strip()
+
+    def _process_failure_detail(self, prefix: str) -> str:
+        parts: list[str] = []
+        if self.proc is not None and self.proc.returncode is not None:
+            parts.append(f"exit_code={self.proc.returncode}")
+        stderr = self._stderr_text()
+        if stderr:
+            parts.append(f"stderr={stderr}")
+        if not parts:
+            return prefix
+        return f"{prefix} ({'; '.join(parts)})"
 
     @staticmethod
     def _sum_cpu_times(proc: psutil.Process) -> float:
@@ -255,8 +289,9 @@ class Repl:
         self._mem_max = 0
 
         if not self.proc or self.proc.returncode is not None:
-            logger.error("REPL process not started or shut down")
-            raise ReplError("REPL process not started or shut down")
+            detail = self._process_failure_detail("REPL process not started or shut down")
+            logger.error(detail)
+            raise ReplError(detail)
 
         loop = self._loop or asyncio.get_running_loop()
 
@@ -283,27 +318,31 @@ class Repl:
             self.proc.stdin.write(payload)
             await self.proc.stdin.drain()
         except BrokenPipeError:
-            logger.error("Broken pipe while writing to REPL stdin")
-            raise LeanError("Lean process broken pipe")
+            detail = self._process_failure_detail("Broken pipe while writing to REPL stdin")
+            logger.error(detail)
+            raise LeanError(detail)
         except Exception as e:
-            logger.error("Failed to write to REPL stdin: %s", e)
-            raise LeanError("Failed to write to REPL stdin")
+            detail = self._process_failure_detail(f"Failed to write to REPL stdin: {e}")
+            logger.error(detail)
+            raise LeanError(detail)
 
         logger.debug("Reading response from REPL stdout")
         raw = await self._read_response()
         elapsed = loop.time() - start
 
         logger.debug("Raw response from REPL: %r", raw)
+        if not raw:
+            detail = self._process_failure_detail("REPL returned empty stdout")
+            logger.error(detail)
+            raise ReplError(detail)
         try:
             resp: CommandResponse | Error = json.loads(raw)
         except json.JSONDecodeError:
-            logger.error("JSON decode error: %r", raw)
-            raise ReplError("JSON decode error")
+            detail = self._process_failure_detail(f"JSON decode error for REPL stdout: {raw!r}")
+            logger.error(detail)
+            raise ReplError(detail)
 
-        self.error_file.seek(0)
-        err = self.error_file.read().strip()
-        self.error_file.seek(0)
-        self.error_file.truncate(0)
+        err = self._stderr_text()
         if err:
             logger.error("Stderr: %s", err)
             raise LeanError(err)
@@ -342,14 +381,23 @@ class Repl:
     async def close(self) -> None:
         if self.proc:
             self.last_check_at = datetime.now()
-            assert self.proc.stdin is not None, "stdin pipe not initialized"
-            self.proc.stdin.close()
-            os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+            if self.proc.stdin is not None:
+                self.proc.stdin.close()
+            try:
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             await self.proc.wait()
             if self._cpu_task:
                 self._cpu_task.cancel()
             if self._mem_task:
                 self._mem_task.cancel()
+            if self._stderr_task:
+                self._stderr_task.cancel()
+            await asyncio.gather(
+                *(task for task in (self._cpu_task, self._mem_task, self._stderr_task) if task),
+                return_exceptions=True,
+            )
 
             if db.connected:
                 await prisma.repl.update(

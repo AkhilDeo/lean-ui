@@ -12,6 +12,16 @@ Capture a new entry after every user correction.
 ## Entries
 - Add newest entries at the top.
 - Date: 2026-03-12
+- Correction received: When implementation is complete, finish the release path by committing, pushing, and then rerunning the authenticated production async repro instead of stopping at local/prod verification.
+- Root cause: I treated successful live validation as a sufficient stopping point and did not immediately carry the fix through the requested VCS handoff.
+- New preventive rule: For explicit implementation requests in this repo, treat the task as incomplete until the intended code is committed, pushed, and the live authenticated verification is rerun on the pushed state.
+- Where applied: `tasks/todo.md`, this single-runtime async REPL regression fix, and the final production verification loop.
+- Date: 2026-03-12
+- Correction received: Keep the Lean verifier on one simple Mathlib environment only; remove alternate Lean versions and `formalconjectures` complexity from the active debug scope.
+- Root cause: I allowed prior multi-environment rollout context to remain mentally coupled to the current async regression instead of immediately collapsing scope to the single supported Lean runtime.
+- New preventive rule: When debugging verifier/runtime regressions after the user re-scopes to one Lean environment, remove multi-version and alternate-project assumptions from the active plan, config changes, and verification steps.
+- Where applied: `tasks/todo.md`, the async REPL regression fix, Docker/build config, and production verification scope.
+- Date: 2026-03-12
 - Correction received: When rolling back the multi-environment work, preserve the separate Railway throughput changes that are already being deployed instead of reverting Railway indiscriminately.
 - Root cause: I initially framed the rollback as a broad return to the pre-rollout state and did not explicitly separate multi-environment routing changes from the independent async-capacity tuning work.
 - New preventive rule: When reverting a feature that overlaps with active infra work, identify and preserve orthogonal production-tuning changes before applying repo or deploy rollbacks.

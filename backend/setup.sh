@@ -8,8 +8,8 @@ if [ -f .env ]; then
 fi
 
 LEAN_SERVER_LEAN_VERSION="${LEAN_SERVER_LEAN_VERSION:-v4.15.0}"
-REPL_REPO_URL="${REPL_REPO_URL:-https://github.com/leanprover-community/repl.git}"
-REPL_BRANCH="${REPL_BRANCH:-$LEAN_SERVER_LEAN_VERSION}"
+REPL_REPO_URL="${REPL_REPO_URL:-https://github.com/FrederickPu/repl.git}"
+REPL_BRANCH="${REPL_BRANCH:-lean415compat}"
 MATHLIB_REPO_URL="${MATHLIB_REPO_URL:-https://github.com/leanprover-community/mathlib4.git}"
 MATHLIB_BRANCH="${MATHLIB_BRANCH:-$LEAN_SERVER_LEAN_VERSION}"
 
@@ -23,6 +23,8 @@ source "$HOME/.elan/env"
 
 echo "Installing Lean ${LEAN_SERVER_LEAN_VERSION}"
 lean --version
+echo "Installing REPL from ${REPL_REPO_URL}@${REPL_BRANCH}"
+echo "Installing Mathlib from ${MATHLIB_REPO_URL}@${MATHLIB_BRANCH}"
 
 # Version comparison function - only proceeds if args are in vX.Y.Z format.
 version_lte() {
