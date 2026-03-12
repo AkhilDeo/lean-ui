@@ -12,6 +12,11 @@ Capture a new entry after every user correction.
 ## Entries
 - Add newest entries at the top.
 - Date: 2026-03-12
+- Correction received: Ignore transient validation artifacts like `.coverage` and `backend/outputs/` before committing release work instead of leaving them as untracked noise in the ship path.
+- Root cause: I treated local verification byproducts as harmless leftovers and did not immediately fold repo hygiene into the release workflow.
+- New preventive rule: Before commit/push/deploy work in this repo, add any new transient validation artifacts to `.gitignore` and keep them out of release commits.
+- Where applied: `.gitignore`, `tasks/todo.md`, and this explicit outcome contract release pass.
+- Date: 2026-03-12
 - Correction received: When implementation is complete, finish the release path by committing, pushing, and then rerunning the authenticated production async repro instead of stopping at local/prod verification.
 - Root cause: I treated successful live validation as a sufficient stopping point and did not immediately carry the fix through the requested VCS handoff.
 - New preventive rule: For explicit implementation requests in this repo, treat the task as incomplete until the intended code is committed, pushed, and the live authenticated verification is rerun on the pushed state.

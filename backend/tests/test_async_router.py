@@ -67,6 +67,8 @@ async def test_async_submit_poll_lifecycle() -> None:
             data = done.json()
             assert data["status"] == "completed"
             assert data["results"][0]["id"] == "one"
+            assert data["results"][0]["status"] == "valid"
+            assert data["results"][0]["passed"] is True
 
 
 @pytest.mark.asyncio
@@ -107,6 +109,39 @@ async def test_async_submit_batch_final_results_ordered() -> None:
             assert done.status_code == 200
             data = done.json()
             assert [item["id"] for item in data["results"]] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_async_poll_serializes_failure_outcome_fields() -> None:
+    app = _build_app()
+
+    async with LifespanManager(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
+        ) as client:
+            payload = CheckRequest(
+                snippets=[Snippet(id="one", code="#check Nat")], timeout=30
+            ).model_dump()
+            submit = await client.post("/async/check", json=payload)
+            assert submit.status_code == 200
+            job_id = submit.json()["job_id"]
+
+            jobs = app.state.async_jobs
+            task = await jobs.dequeue_task(timeout_sec=1)
+            assert task is not None
+            await jobs.mark_task_started(task)
+            await jobs.mark_task_failure(
+                task, "worker_error: No available REPLs", task.snippet.id
+            )
+
+            done = await client.get(f"/async/check/{job_id}")
+            assert done.status_code == 200
+            data = done.json()
+            assert data["status"] == "completed"
+            assert data["results"][0]["status"] == "server_error"
+            assert data["results"][0]["passed"] is False
 
 
 @pytest.mark.asyncio
