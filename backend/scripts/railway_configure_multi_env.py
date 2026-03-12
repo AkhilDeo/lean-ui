@@ -24,6 +24,22 @@ DEFAULT_ENV_SERVICE_IDS = {
     "mathlib-v4.27": "lean-ui-mathlib427",
     "formal-conjectures-v4.27": "lean-ui-formalconjectures427",
 }
+MATHLIB_V427_BUILD_VARS = {
+    "LEAN_PROJECT_NAME": "mathlib4",
+    "LEAN_PROJECT_REPO_URL": "https://github.com/leanprover-community/mathlib4.git",
+    "LEAN_PROJECT_REF": "v4.27.0",
+    "LEAN_PROJECT_CACHE_CMD": "lake exe cache get",
+    "LEAN_PROJECT_UPDATE_MANIFEST": "true",
+    "REPL_BRANCH": "v4.27.0",
+}
+FORMAL_CONJECTURES_BUILD_VARS = {
+    "LEAN_PROJECT_NAME": "formal-conjectures",
+    "LEAN_PROJECT_REPO_URL": "https://github.com/google-deepmind/formal-conjectures.git",
+    "LEAN_PROJECT_REF": FORMAL_CONJECTURES_REF,
+    "LEAN_PROJECT_CACHE_CMD": "",
+    "LEAN_PROJECT_UPDATE_MANIFEST": "false",
+    "REPL_BRANCH": "v4.27.0",
+}
 
 
 class RailwayClient:
@@ -426,6 +442,7 @@ def main() -> int:
         "LEAN_SERVER_IDLE_REPL_TTL_SEC": str(args.mathlib_v427_idle_ttl_sec),
         "LEAN_SERVER_GATEWAY_DEFAULT_ENVIRONMENT": "mathlib-v4.27",
         "LEAN_SERVER_GATEWAY_ENVIRONMENTS": "[]",
+        **MATHLIB_V427_BUILD_VARS,
     }
     formal_conjectures_update = {
         "LEAN_SERVER_ENVIRONMENT_ID": "formal-conjectures-v4.27",
@@ -437,6 +454,7 @@ def main() -> int:
         "LEAN_SERVER_IDLE_REPL_TTL_SEC": str(args.formal_conjectures_idle_ttl_sec),
         "LEAN_SERVER_GATEWAY_DEFAULT_ENVIRONMENT": "formal-conjectures-v4.27",
         "LEAN_SERVER_GATEWAY_ENVIRONMENTS": "[]",
+        **FORMAL_CONJECTURES_BUILD_VARS,
     }
 
     plan = {
@@ -466,22 +484,8 @@ def main() -> int:
             },
         },
         "required_build_args": {
-            "mathlib-v4.27": {
-                "LEAN_PROJECT_NAME": "mathlib4",
-                "LEAN_PROJECT_REPO_URL": "https://github.com/leanprover-community/mathlib4.git",
-                "LEAN_PROJECT_REF": "v4.27.0",
-                "LEAN_PROJECT_CACHE_CMD": "lake exe cache get",
-                "LEAN_PROJECT_UPDATE_MANIFEST": "true",
-                "REPL_BRANCH": "v4.27.0",
-            },
-            "formal-conjectures-v4.27": {
-                "LEAN_PROJECT_NAME": "formal-conjectures",
-                "LEAN_PROJECT_REPO_URL": "https://github.com/google-deepmind/formal-conjectures.git",
-                "LEAN_PROJECT_REF": FORMAL_CONJECTURES_REF,
-                "LEAN_PROJECT_CACHE_CMD": "",
-                "LEAN_PROJECT_UPDATE_MANIFEST": "false",
-                "REPL_BRANCH": "v4.27.0",
-            },
+            "mathlib-v4.27": MATHLIB_V427_BUILD_VARS,
+            "formal-conjectures-v4.27": FORMAL_CONJECTURES_BUILD_VARS,
         },
         "deploy_validation": {
             "gateway_public_url": gateway_public_url,
