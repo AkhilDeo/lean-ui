@@ -30,6 +30,7 @@ MATHLIB_V427_BUILD_VARS = {
     "LEAN_PROJECT_REF": "v4.27.0",
     "LEAN_PROJECT_CACHE_CMD": "lake exe cache get",
     "LEAN_PROJECT_UPDATE_MANIFEST": "true",
+    "REPL_REPO_URL": "https://github.com/leanprover-community/repl.git",
     "REPL_BRANCH": "v4.27.0",
 }
 FORMAL_CONJECTURES_BUILD_VARS = {
@@ -38,6 +39,7 @@ FORMAL_CONJECTURES_BUILD_VARS = {
     "LEAN_PROJECT_REF": FORMAL_CONJECTURES_REF,
     "LEAN_PROJECT_CACHE_CMD": "",
     "LEAN_PROJECT_UPDATE_MANIFEST": "false",
+    "REPL_REPO_URL": "https://github.com/leanprover-community/repl.git",
     "REPL_BRANCH": "v4.27.0",
 }
 
