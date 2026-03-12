@@ -15,7 +15,7 @@ export function VerificationPanel({ result, isLoading }: VerificationPanelProps)
     return (
       <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4" />
-        <p>Verifying with Lean...</p>
+        <p>Verifying with Lean 4.15...</p>
       </div>
     );
   }
@@ -63,19 +63,13 @@ export function VerificationPanel({ result, isLoading }: VerificationPanelProps)
         <div className="flex-1">
           <h3 className="font-semibold">{result.title || 'Verification Result'}</h3>
           <p className="text-xs text-muted-foreground">
-            {result.resolvedProjectLabel} • Lean {result.leanVersion} •{' '}
-            {new Date(result.timestamp).toLocaleString()}
+            Lean {result.leanVersion} • {new Date(result.timestamp).toLocaleString()}
           </p>
         </div>
         {getStatusBadge()}
       </div>
 
       <ScrollArea className="flex-1 p-4">
-        <div className="mb-4 flex flex-wrap gap-2">
-          <Badge variant="outline">Requested: {result.requestedEnvironment}</Badge>
-          <Badge variant="outline">Resolved: {result.resolvedEnvironmentId}</Badge>
-        </div>
-
         {result.status === 'success' && result.errors.length === 0 && result.warnings.length === 0 && (
           <div className="flex flex-col items-center justify-center py-8 text-green-500">
             <CheckCircle className="h-16 w-16 mb-4" />

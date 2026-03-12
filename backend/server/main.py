@@ -2,7 +2,6 @@ import asyncio
 import textwrap
 import threading
 from contextlib import asynccontextmanager
-from contextlib import suppress
 from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from fastapi import FastAPI, Request, Response
@@ -17,7 +16,6 @@ from .manager import Manager
 from .routers.async_check import router as async_check_router
 from .routers.backward import router as backward_router
 from .routers.check import router as check_router
-from .routers.environments import router as environments_router
 from .routers.health import router as health_router
 from .settings import Environment, Settings
 
@@ -33,14 +31,12 @@ def create_app(settings: Settings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info(
-            "Running Kimina Lean Server [bold]'v{}'[/bold] in [bold]{}[/bold] mode on {}:{} with Lean version: '{}' environment_id='{}' project='{}'",
+            "Running Kimina Lean Server [bold]'v{}'[/bold] in [bold]{}[/bold] mode on {}:{} with Lean version: '{}'",
             __version__,
             settings.environment.value,
             settings.host,
             settings.port,
             settings.lean_version,
-            settings.environment_id,
-            settings.project_label,
         )
         if settings.environment == Environment.prod and settings.api_key is None:
             raise RuntimeError(
@@ -62,7 +58,6 @@ def create_app(settings: Settings) -> FastAPI:
             max_repl_mem=settings.max_repl_mem,
             init_repls=settings.init_repls,
             min_host_free_mem=settings.min_host_free_mem,
-            idle_repl_ttl_sec=settings.idle_repl_ttl_sec,
         )
         app.state.settings = settings
         app.state.manager = manager
@@ -86,22 +81,6 @@ def create_app(settings: Settings) -> FastAPI:
 
         asyncio.create_task(_init_repls_background())
 
-        async def _reap_idle_repls_background() -> None:
-            if settings.idle_repl_ttl_sec <= 0:
-                return
-            while True:
-                try:
-                    await asyncio.sleep(min(max(settings.idle_repl_ttl_sec, 1), 60))
-                    reaped = await manager.reap_idle_repls()
-                    if reaped:
-                        logger.info("Reaped {} idle REPL(s)", reaped)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.exception("Idle REPL reaper failed: %s", e)
-
-        idle_reaper_task = asyncio.create_task(_reap_idle_repls_background())
-
         if settings.environment == Environment.dev:
             threading.Timer(
                 0.1,
@@ -124,9 +103,6 @@ def create_app(settings: Settings) -> FastAPI:
         async_jobs = getattr(app.state, "async_jobs", None)
         if async_jobs is not None:
             await async_jobs.close()
-        idle_reaper_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await idle_reaper_task
         await app.state.manager.cleanup()
         await db.disconnect()
 
@@ -156,11 +132,6 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(
         health_router,
         tags=["health"],
-    )
-    app.include_router(
-        environments_router,
-        prefix="/api",
-        tags=["environments"],
     )
     app.include_router(
         backward_router,

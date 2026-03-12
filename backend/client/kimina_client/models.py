@@ -24,13 +24,6 @@ from tabulate import tabulate  # type: ignore
 
 logger = logging.getLogger("kimina-client")
 
-EnvironmentName = Literal[
-    "auto",
-    "mathlib-v4.15",
-    "mathlib-v4.27",
-    "formal-conjectures-v4.27",
-]
-
 
 class SnippetStatus(str, Enum):
     valid = "valid"
@@ -77,17 +70,6 @@ class VerifyRequestBody(BaseModel):
     timeout: int = 300
     infotree_type: Infotree | None = None
     disable_cache: bool = False
-    include_sorry_details: bool = Field(
-        False,
-        description=(
-            "Request rich per-hole sorry details including flat coordinates, local "
-            "context, and pretty proof state."
-        ),
-    )
-    environment: EnvironmentName | None = Field(
-        None,
-        description="Requested Lean environment. Omit to preserve the server default.",
-    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -115,7 +97,6 @@ class Command(TypedDict):
     cmd: str
     env: NotRequired[int | None]
     infotree: NotRequired[Infotree]
-    include_sorry_details: NotRequired[bool]
     gc: NotRequired[bool]
 
 
@@ -128,13 +109,7 @@ class Sorry(TypedDict):
     pos: Pos
     endPos: Pos
     goal: str
-    line: NotRequired[int]
-    column: NotRequired[int]
-    endLine: NotRequired[int]
-    endColumn: NotRequired[int]
-    localContext: NotRequired[str]
-    proofState: NotRequired[str | int | None]
-    proofStateId: NotRequired[int | None]
+    proofState: NotRequired[int | None]
 
 
 class Error(TypedDict):
@@ -170,9 +145,6 @@ class Diagnostics(TypedDict, total=False):
     repl_uuid: str
     cpu_max: float
     memory_max: float
-    environment_id: str
-    lean_version: str
-    project_label: str
 
 
 # TODO: use basemodel pydantic instead
@@ -257,17 +229,6 @@ class BaseRequest(BaseModel):
         None,
         description="Level of detail for the info tree.",
     )
-    include_sorry_details: bool = Field(
-        False,
-        description=(
-            "Request rich per-hole sorry details including flat coordinates, local "
-            "context, and pretty proof state."
-        ),
-    )
-    environment: EnvironmentName | None = Field(
-        None,
-        description="Requested Lean environment. Use `auto` to let the gateway pick.",
-    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -287,8 +248,6 @@ class ReplRequest(BaseRequest):
                 "debug": False,
                 "reuse": True,
                 "infotree": "original",
-                "include_sorry_details": True,
-                "environment": "mathlib-v4.15",
             },
         }
     )
@@ -379,95 +338,9 @@ class CheckRequest(BaseRequest):
                 "debug": False,
                 "reuse": True,
                 "infotree": "original",
-                "include_sorry_details": True,
-                "environment": "auto",
             },
         }
     )
-
-
-class GatewayEnvironmentInfo(BaseModel):
-    id: str
-    display_name: str
-    lean_version: str
-    project_label: str
-    project_type: str
-    selectable: bool = True
-    auto_routable: bool = True
-    is_default: bool = False
-
-
-class GatewayEnvironmentsResponse(BaseModel):
-    default_environment: str
-    environments: list[GatewayEnvironmentInfo]
-
-
-class GatewayEnvironmentHealthInfo(BaseModel):
-    id: str
-    healthy: bool
-    status: str
-    environment_id: str | None = None
-    lean_version: str | None = None
-    project_label: str | None = None
-    project_type: str | None = None
-    error: str | None = None
-
-
-class GatewayEnvironmentHealthResponse(BaseModel):
-    environments: list[GatewayEnvironmentHealthInfo]
-
-
-class AsyncJobStatus(str, Enum):
-    queued = "queued"
-    running = "running"
-    completed = "completed"
-    failed = "failed"
-    expired = "expired"
-
-
-class AsyncProgress(BaseModel):
-    total: int
-    done: int
-    failed: int
-    running: int
-
-
-class AsyncEnvironmentMetrics(BaseModel):
-    queue_depth: int
-    inflight_jobs: int
-    running_tasks: int
-    oldest_queued_age_sec: float
-    dequeue_rate: float
-    enqueue_rate: float
-
-
-class AsyncSubmitResponse(BaseModel):
-    job_id: str
-    status: AsyncJobStatus
-    total_snippets: int
-    queued_at: str
-    expires_at: str
-
-
-class AsyncPollResponse(BaseModel):
-    job_id: str
-    status: AsyncJobStatus
-    progress: AsyncProgress
-    results: list[dict[str, Any]] | None = None
-    created_at: str
-    updated_at: str
-    expires_at: str
-    error: str | None = None
-
-
-class AsyncQueueMetrics(BaseModel):
-    queue_depth: int
-    inflight_jobs: int
-    running_tasks: int
-    oldest_queued_age_sec: float
-    dequeue_rate: float
-    enqueue_rate: float
-    environments: dict[str, AsyncEnvironmentMetrics] | None = None
 
 
 def add_color(text: str, color: str) -> str:

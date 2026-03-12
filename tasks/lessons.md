@@ -12,6 +12,11 @@ Capture a new entry after every user correction.
 ## Entries
 - Add newest entries at the top.
 - Date: 2026-03-12
+- Correction received: When rolling back the multi-environment work, preserve the separate Railway throughput changes that are already being deployed instead of reverting Railway indiscriminately.
+- Root cause: I initially framed the rollback as a broad return to the pre-rollout state and did not explicitly separate multi-environment routing changes from the independent async-capacity tuning work.
+- New preventive rule: When reverting a feature that overlaps with active infra work, identify and preserve orthogonal production-tuning changes before applying repo or deploy rollbacks.
+- Where applied: `tasks/todo.md`, the single-environment rollback plan, and the targeted Railway cleanup for `lean-ui`.
+- Date: 2026-03-12
 - Correction received: Push the full worktree and take the feature all the way through commit, push, Railway deploy, and production verification instead of stopping at local implementation.
 - Root cause: I treated repository implementation and local validation as a sufficient handoff point even though the explicit request required finishing the release path on the live deployment.
 - New preventive rule: When the user asks to push and deploy, treat local implementation as incomplete until the changes are committed, pushed, deployed, and production-checked.

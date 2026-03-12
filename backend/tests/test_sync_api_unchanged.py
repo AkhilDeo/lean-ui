@@ -23,20 +23,6 @@ def test_sync_routes_still_present() -> None:
     with _client() as client:
         paths = client.get("/api/openapi.json").json()["paths"]
         assert "/api/check" in paths
-        assert "/api/environments" in paths
-
-
-def test_openapi_documents_include_sorry_details_for_check_and_verify() -> None:
-    with _client() as client:
-        spec = client.get("/api/openapi.json").json()
-        schemas = spec["components"]["schemas"]
-        check_props = schemas["CheckRequest"]["properties"]
-        verify_props = schemas["VerifyRequestBody"]["properties"]
-
-        assert "include_sorry_details" in check_props
-        assert "include_sorry_details" in verify_props
-        assert "rich per-hole sorry details" in check_props["include_sorry_details"]["description"]
-        assert "rich per-hole sorry details" in verify_props["include_sorry_details"]["description"]
 
 
 def test_sync_check_validation_unchanged() -> None:

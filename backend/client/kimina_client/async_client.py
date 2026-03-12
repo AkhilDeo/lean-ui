@@ -14,19 +14,7 @@ from tenacity import (
 from tqdm.asyncio import tqdm_asyncio
 
 from .base import BaseKimina
-from .models import (
-    AsyncPollResponse,
-    AsyncQueueMetrics,
-    AsyncSubmitResponse,
-    CheckRequest,
-    CheckResponse,
-    EnvironmentName,
-    GatewayEnvironmentHealthResponse,
-    GatewayEnvironmentsResponse,
-    Infotree,
-    ReplResponse,
-    Snippet,
-)
+from .models import CheckRequest, CheckResponse, Infotree, ReplResponse, Snippet
 from .utils import build_log, find_code_column, find_id_column
 
 logger = logging.getLogger("kimina-client")
@@ -60,8 +48,6 @@ class AsyncKiminaClient(BaseKimina):
         debug: bool = False,
         reuse: bool = True,
         infotree: Infotree | None = None,
-        include_sorry_details: bool = False,
-        environment: EnvironmentName | None = None,
         batch_size: int = 8,
         max_workers: int = 5,
         show_progress: bool = True,
@@ -80,14 +66,7 @@ class AsyncKiminaClient(BaseKimina):
         async def worker(batch: list[Snippet]) -> CheckResponse:
             async with sem:
                 return await self.api_check(
-                    batch,
-                    timeout,
-                    debug,
-                    reuse,
-                    infotree,
-                    include_sorry_details,
-                    environment,
-                    True,
+                    batch, timeout, debug, reuse, infotree, True
                 )
 
         tasks = [worker(batch) for batch in batches]
@@ -105,17 +84,8 @@ class AsyncKiminaClient(BaseKimina):
         debug: bool = False,
         reuse: bool = True,
         infotree: Infotree | None = None,
-        include_sorry_details: bool = False,
-        environment: EnvironmentName | None = None,
         safe: bool = False,
     ) -> CheckResponse:
-        """
-        Makes a POST request to `/api/check`.
-
-        Set `include_sorry_details=True` to request rich per-hole `sorries`
-        payloads with flat coordinates, local context, and pretty proof state
-        text when Lean reports placeholders.
-        """
         try:
             url = self.build_url("/api/check")
             payload = CheckRequest(
@@ -124,8 +94,6 @@ class AsyncKiminaClient(BaseKimina):
                 debug=debug,
                 reuse=reuse,
                 infotree=infotree,
-                include_sorry_details=include_sorry_details,
-                environment=environment,
             ).model_dump()
 
             resp = await self._query(url, payload)
@@ -175,57 +143,6 @@ class AsyncKiminaClient(BaseKimina):
         url = self.build_url("/health")
         return await self._query(url, method="GET")
 
-    async def environments(self) -> GatewayEnvironmentsResponse:
-        url = self.build_url("/api/environments")
-        resp = await self._query(url, method="GET")
-        return self.handle(resp, GatewayEnvironmentsResponse)
-
-    async def environment_health(self) -> GatewayEnvironmentHealthResponse:
-        url = self.build_url("/api/environments/health")
-        resp = await self._query(url, method="GET")
-        return self.handle(resp, GatewayEnvironmentHealthResponse)
-
-    async def async_check(
-        self,
-        snippets: list[Snippet],
-        timeout: int = 30,
-        debug: bool = False,
-        reuse: bool = True,
-        infotree: Infotree | None = None,
-        include_sorry_details: bool = False,
-        environment: EnvironmentName | None = None,
-    ) -> AsyncSubmitResponse:
-        url = self.build_url("/api/async/check")
-        payload = CheckRequest(
-            snippets=snippets,
-            timeout=timeout,
-            debug=debug,
-            reuse=reuse,
-            infotree=infotree,
-            include_sorry_details=include_sorry_details,
-            environment=environment,
-        ).model_dump()
-        resp = await self._query(url, payload)
-        return self.handle(resp, AsyncSubmitResponse)
-
-    async def async_poll(
-        self, job_id: str, wait_sec: float = 0.0
-    ) -> AsyncPollResponse:
-        url = self.build_url(f"/api/async/check/{job_id}")
-        resp = await self._query(url, payload={"wait_sec": wait_sec}, method="GET")
-        return self.handle(resp, AsyncPollResponse)
-
-    async def async_metrics(
-        self, include_environments: bool = False
-    ) -> AsyncQueueMetrics:
-        url = self.build_url("/api/async/metrics")
-        resp = await self._query(
-            url,
-            payload={"include_environments": include_environments},
-            method="GET",
-        )
-        return self.handle(resp, AsyncQueueMetrics)
-
     async def test(self) -> None:
         logger.info("Testing with `#check Nat`...")
         response = (
@@ -251,7 +168,6 @@ class AsyncKiminaClient(BaseKimina):
         max_workers: int = 5,
         timeout: int = 60,
         reuse: bool = True,
-        environment: EnvironmentName | None = None,
         show_progress: bool = True,
     ) -> None:
         """
@@ -319,7 +235,6 @@ class AsyncKiminaClient(BaseKimina):
             snips=snips,
             timeout=timeout,
             reuse=reuse,
-            environment=environment,
             batch_size=batch_size,
             max_workers=max_workers,
             show_progress=show_progress,

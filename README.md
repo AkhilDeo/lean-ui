@@ -16,7 +16,7 @@
 ## Features
 
 - **Monaco Editor** - Professional code editor with Lean syntax highlighting
-- **Real-time Verification** - Instant feedback on your Lean proofs via the multi-environment [kimina-lean-server](https://github.com/project-numina/kimina-lean-server) gateway
+- **Real-time Verification** - Instant feedback on your Lean proofs via [kimina-lean-server](https://github.com/project-numina/kimina-lean-server)
 - **Smart Error Display** - Clear, formatted errors and warnings with precise line/column positions
 - **Verification History** - Automatic saving of all verifications with localStorage persistence
 
@@ -66,7 +66,7 @@
    
    Navigate to [http://localhost:3000](http://localhost:3000)
 
-That's it! You should see the Lean environment gateway interface ready to use.
+That's it! You should see the Lean 4.15 Verifier interface ready to use.
 
 ### Stopping the Services
 
@@ -81,13 +81,12 @@ cd backend && docker compose down
 
 ### Basic Workflow
 
-1. **Write Lean Code** - Enter your Lean code in the Monaco editor
-2. **Choose Environment** - Keep `Auto` for the default 4.15 flow or select a specific environment
-3. **Add Title (Optional)** - Give your verification a descriptive name, or let it auto-generate
-4. **Click Verify** - Submit your code for verification
-5. **View Results** - See success, errors, warnings, and the resolved environment in the results panel
-6. **Browse History** - Access past verifications from the sidebar
-7. **Manage History** - Delete individual entries or clear all history
+1. **Write Lean Code** - Enter your Lean 4.15 code in the Monaco editor
+2. **Add Title (Optional)** - Give your verification a descriptive name, or let it auto-generate
+3. **Click Verify** - Submit your code for verification
+4. **View Results** - See success, errors, or warnings in the results panel
+5. **Browse History** - Access past verifications from the sidebar
+6. **Manage History** - Delete individual entries or clear all history
 
 ### Example Lean Code
 
@@ -111,22 +110,17 @@ Create a `.env.local` file in the root directory (optional):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KIMINA_SERVER_URL` | `http://localhost:10000` | URL of the public kimina-lean-server gateway |
+| `KIMINA_SERVER_URL` | `http://localhost:10000` | URL of the kimina-lean-server backend |
 
 ### Backend Configuration
 
-The backend gateway defaults to `mathlib-v4.15` when `environment` is omitted. To customize, edit `backend/.env`:
+The backend defaults to Lean 4.15.0. To customize, edit `backend/.env`:
 
 ```bash
 LEAN_SERVER_LEAN_VERSION=v4.15.0  # Change Lean version
-LEAN_SERVER_ENVIRONMENT_ID=mathlib-v4.15
 LEAN_SERVER_MAX_REPLS=14           # Max concurrent REPL instances
 LEAN_SERVER_MAX_WAIT=60            # Max wait time in seconds
 ```
-
-The public API also exposes `GET /api/environments`, `GET /api/environments/health`, and accepts an optional `environment` field on `POST /api/check`, `POST /verify`, and `POST /api/async/check`. If `environment` is omitted, the gateway still uses `mathlib-v4.15` by default.
-
-Async job ids returned by the public gateway are environment-scoped, for example `mathlib-v4.27:<job_id>`.
 
 See the [kimina-lean-server documentation](https://github.com/project-numina/kimina-lean-server) for all options.
 

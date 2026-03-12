@@ -248,30 +248,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--execute", action="store_true", help="Apply mutations. Without this flag, dry-run only.")
     parser.add_argument("--apply-limits", action="store_true", help="Also apply CPU/memory/replica updates.")
 
-    parser.add_argument("--api-max-repls", type=int, default=10)
-    parser.add_argument("--api-max-repl-mem", default="10G")
-    parser.add_argument("--worker-max-repls", type=int, default=8)
-    parser.add_argument("--worker-max-repl-mem", default="10G")
+    parser.add_argument("--api-max-repls", type=int, default=1)
+    parser.add_argument("--api-max-repl-mem", default="8G")
+    parser.add_argument("--worker-max-repls", type=int, default=3)
+    parser.add_argument("--worker-max-repl-mem", default="8G")
     parser.add_argument("--min-host-free-mem", default="4G")
     parser.add_argument("--async-enabled", default="true")
     parser.add_argument("--async-metrics-enabled", default="true")
     parser.add_argument("--async-admission-queue-limit", type=int, default=0)
     parser.add_argument("--async-alert-max-oldest-queued-age-sec", type=int, default=60)
     parser.add_argument("--async-queue-name", default="lean_async_check")
-    parser.add_argument("--worker-async-concurrency", type=int, default=8)
+    parser.add_argument("--worker-async-concurrency", type=int, default=3)
     parser.add_argument(
         "--api-init-repls",
-        default='{"import Mathlib":2,"import Mathlib\\nimport Aesop":2}',
+        default="{}",
     )
     parser.add_argument(
         "--worker-init-repls",
-        default='{"import Mathlib":4,"import Mathlib\\nimport Aesop":4}',
+        default='{"import Mathlib":1,"import Mathlib\\nimport Aesop":1}',
     )
     parser.add_argument("--redis-url", default="")
 
-    parser.add_argument("--api-vcpus", type=float, default=16.0)
-    parser.add_argument("--api-memory-gb", type=float, default=16.0)
-    parser.add_argument("--worker-vcpus", type=float, default=24.0)
+    parser.add_argument("--api-vcpus", type=float, default=4.0)
+    parser.add_argument("--api-memory-gb", type=float, default=8.0)
+    parser.add_argument("--worker-vcpus", type=float, default=8.0)
     parser.add_argument("--worker-memory-gb", type=float, default=32.0)
     parser.add_argument("--worker-replicas", type=int, default=3)
 

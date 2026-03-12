@@ -24,7 +24,6 @@ class AsyncTaskPayload(BaseModel):
     debug: bool
     reuse: bool
     infotree: Infotree | None = None
-    include_sorry_details: bool = False
     enqueued_at: str
 
     @classmethod
@@ -39,7 +38,6 @@ class AsyncTaskPayload(BaseModel):
         debug: bool,
         reuse: bool,
         infotree: Infotree | None,
-        include_sorry_details: bool,
     ) -> "AsyncTaskPayload":
         return cls(
             job_id=job_id,
@@ -50,7 +48,6 @@ class AsyncTaskPayload(BaseModel):
             debug=debug,
             reuse=reuse,
             infotree=infotree,
-            include_sorry_details=include_sorry_details,
             enqueued_at=datetime.now(tz=timezone.utc).isoformat(),
         )
 

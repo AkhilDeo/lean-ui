@@ -34,35 +34,6 @@ async def test_worker_process_task_success(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_worker_process_task_passes_include_sorry_details(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
-    submit = await jobs.submit(
-        CheckRequest(
-            snippets=[Snippet(id="s1", code="theorem foo : Nat := by sorry")],
-            timeout=30,
-            include_sorry_details=True,
-        )
-    )
-    captured: dict[str, object] = {}
-
-    async def fake_run_checks(*args, **kwargs):  # type: ignore[no-untyped-def]
-        captured["include_sorry_details"] = kwargs["include_sorry_details"]
-        return [ReplResponse(id="s1", time=0.1, response={"env": 0})]
-
-    monkeypatch.setattr("server.worker.run_checks", fake_run_checks)
-
-    did_work = await process_task(jobs=jobs, manager=object(), task_timeout_sec=1)
-    assert did_work is True
-    assert captured["include_sorry_details"] is True
-
-    poll = await jobs.poll(submit.job_id)
-    assert poll is not None
-    assert poll.progress.done == 1
-
-
-@pytest.mark.asyncio
 async def test_worker_process_task_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
     submit = await jobs.submit(

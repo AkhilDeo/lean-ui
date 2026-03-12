@@ -1,6 +1,5 @@
 import os
 import re
-import json
 from enum import Enum
 from pathlib import Path
 from typing import cast
@@ -28,12 +27,8 @@ class Settings(BaseSettings):
     environment: Environment = Environment.dev
 
     lean_version: str = "v4.15.0"
-    environment_id: str = "mathlib-v4.15"
-    project_label: str = "Mathlib"
-    project_type: str = "mathlib"
     repl_path: Path = BASE_DIR / "repl/.lake/build/bin/repl"
     project_dir: Path = BASE_DIR / "mathlib4"
-    idle_repl_ttl_sec: int = 0
 
     max_repls: int = max((os.cpu_count() or 1) - 1, 1)
     max_repl_uses: int = -1
@@ -67,10 +62,6 @@ class Settings(BaseSettings):
 
     # Host-level memory guard for REPL creation.
     min_host_free_mem: int = 4
-
-    gateway_default_environment: str = "mathlib-v4.15"
-    gateway_internal_api_key: str | None = None
-    gateway_environments: list[dict[str, object]] = []
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", env_prefix="LEAN_SERVER_"
@@ -138,32 +129,6 @@ class Settings(BaseSettings):
         if v < 0:
             raise ValueError("request_timeout_max_sec must be >= 0")
         return v
-
-    @field_validator("idle_repl_ttl_sec", mode="before")
-    @classmethod
-    def _parse_idle_repl_ttl_sec(cls, v: int | str) -> int:
-        parsed = int(v)
-        if parsed < 0:
-            raise ValueError("idle_repl_ttl_sec must be >= 0")
-        return parsed
-
-    @field_validator("gateway_environments", mode="before")
-    @classmethod
-    def _parse_gateway_environments(
-        cls, v: str | list[dict[str, object]] | None
-    ) -> list[dict[str, object]]:
-        if v is None:
-            return []
-        if isinstance(v, list):
-            return v
-        if isinstance(v, str):
-            if not v.strip():
-                return []
-            parsed = json.loads(v)
-            if not isinstance(parsed, list):
-                raise ValueError("gateway_environments must decode to a list")
-            return cast(list[dict[str, object]], parsed)
-        raise ValueError("gateway_environments must be a JSON array")
 
 
 settings = Settings()

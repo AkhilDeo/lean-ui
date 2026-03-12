@@ -305,17 +305,17 @@ def main() -> int:
             "multiRegionConfig": {REGION: {"numReplicas": 3}},
         },
     )
-    update_limits(client, service_id=worker_id, vcpus=32, memory_gb=32)
+    update_limits(client, service_id=worker_id, vcpus=8, memory_gb=32)
 
     update_service_instance(
         client,
         service_id=API_SERVICE_ID,
         input_payload={
-            "sleepApplication": True,
+            "sleepApplication": False,
             "multiRegionConfig": {REGION: {"numReplicas": 1}},
         },
     )
-    update_limits(client, service_id=API_SERVICE_ID, vcpus=2, memory_gb=10)
+    update_limits(client, service_id=API_SERVICE_ID, vcpus=4, memory_gb=8)
 
     redis_vars = get_service_variables(client, service_id=redis_id)
     redis_url = choose_redis_url(redis_vars)
@@ -335,14 +335,16 @@ def main() -> int:
     api_vars = {
         **common,
         "LEAN_SERVER_MAX_REPLS": "1",
-        "LEAN_SERVER_MAX_REPL_MEM": "10G",
+        "LEAN_SERVER_MAX_REPL_MEM": "8G",
         "LEAN_SERVER_INIT_REPLS": "{}",
+        "LEAN_SERVER_IDLE_REPL_TTL_SEC": "60",
     }
     worker_vars = {
         **common,
         "LEAN_SERVER_MAX_REPLS": "3",
-        "LEAN_SERVER_MAX_REPL_MEM": "10G",
-        "LEAN_SERVER_INIT_REPLS": '{"import Mathlib": 2}',
+        "LEAN_SERVER_MAX_REPL_MEM": "8G",
+        "LEAN_SERVER_INIT_REPLS": '{"import Mathlib":1,"import Mathlib\\nimport Aesop":1}',
+        "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY": "3",
     }
 
     upsert_variables(client, service_id=API_SERVICE_ID, variables=api_vars)

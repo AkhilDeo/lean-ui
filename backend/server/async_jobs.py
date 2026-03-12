@@ -63,15 +63,6 @@ class AsyncPollResponse(BaseModel):
     error: str | None = None
 
 
-class AsyncEnvironmentMetrics(BaseModel):
-    queue_depth: int
-    inflight_jobs: int
-    running_tasks: int
-    oldest_queued_age_sec: float
-    dequeue_rate: float
-    enqueue_rate: float
-
-
 class AsyncQueueMetrics(BaseModel):
     queue_depth: int
     inflight_jobs: int
@@ -79,7 +70,6 @@ class AsyncQueueMetrics(BaseModel):
     oldest_queued_age_sec: float
     dequeue_rate: float
     enqueue_rate: float
-    environments: dict[str, AsyncEnvironmentMetrics] | None = None
 
 
 class AsyncBacklogFullError(Exception):
@@ -255,7 +245,6 @@ class RedisAsyncJobs:
                 debug=request.debug,
                 reuse=request.reuse,
                 infotree=request.infotree,
-                include_sorry_details=request.include_sorry_details,
             )
             for i, snippet in enumerate(request.snippets)
         ]
@@ -739,7 +728,6 @@ class InMemoryAsyncJobs:
                 debug=request.debug,
                 reuse=request.reuse,
                 infotree=request.infotree,
-                include_sorry_details=request.include_sorry_details,
             )
             for i, snippet in enumerate(request.snippets)
         ]

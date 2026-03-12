@@ -23,6 +23,7 @@ async def test_in_memory_queue_roundtrip() -> None:
         debug=False,
         reuse=True,
         infotree=None,
+        include_sorry_details=False,
     )
     await queue.enqueue_many([task])
     assert await queue.length() == 1

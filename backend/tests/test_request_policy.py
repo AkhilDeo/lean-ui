@@ -68,38 +68,6 @@ def test_verify_request_forbids_unknown_fields() -> None:
         VerifyRequestBody.model_validate(payload)
 
 
-def test_verify_request_accepts_environment_field() -> None:
-    payload = {
-        "codes": [{"custom_id": "1", "code": "#check Nat"}],
-        "timeout": 30,
-        "disable_cache": False,
-        "environment": "formal-conjectures-v4.27",
-    }
-    request = VerifyRequestBody.model_validate(payload)
-    assert request.environment == "formal-conjectures-v4.27"
-
-
-def test_check_request_accepts_include_sorry_details_field() -> None:
-    payload = {
-        "snippets": [{"id": "one", "code": "#check Nat"}],
-        "timeout": 30,
-        "include_sorry_details": True,
-    }
-    request = CheckRequest.model_validate(payload)
-    assert request.include_sorry_details is True
-
-
-def test_verify_request_accepts_include_sorry_details_field() -> None:
-    payload = {
-        "codes": [{"custom_id": "1", "code": "#check Nat"}],
-        "timeout": 30,
-        "disable_cache": False,
-        "include_sorry_details": True,
-    }
-    request = VerifyRequestBody.model_validate(payload)
-    assert request.include_sorry_details is True
-
-
 def test_api_check_rejects_unknown_fields(root_client: TestClient) -> None:
     payload = {
         "snippets": [{"id": "one", "code": "#check Nat"}],
@@ -119,7 +87,6 @@ def test_api_check_applies_normalized_policy(
         captured["timeout"] = args[1]
         captured["debug"] = args[2]
         captured["reuse"] = args[4]
-        captured["include_sorry_details"] = args[6]
         return [ReplResponse(id="one", time=0.1, response={"env": 0})]
 
     monkeypatch.setattr("server.routers.check.run_checks", fake_run_checks)
@@ -129,24 +96,12 @@ def test_api_check_applies_normalized_policy(
         "timeout": 999,
         "debug": True,
         "reuse": False,
-        "include_sorry_details": True,
     }
     resp = root_client.post("/api/check", json=payload)
     assert resp.status_code == 200
     assert captured["timeout"] == 60.0
     assert captured["debug"] is False
     assert captured["reuse"] is True
-    assert captured["include_sorry_details"] is True
-
-
-def test_check_request_accepts_environment_field() -> None:
-    payload = {
-        "snippets": [{"id": "one", "code": "#check Nat"}],
-        "timeout": 30,
-        "environment": "mathlib-v4.27",
-    }
-    request = CheckRequest.model_validate(payload)
-    assert request.environment == "mathlib-v4.27"
 
 
 def test_api_verify_applies_normalized_policy(
@@ -158,7 +113,6 @@ def test_api_verify_applies_normalized_policy(
         captured["timeout"] = args[1]
         captured["debug"] = args[2]
         captured["reuse"] = args[4]
-        captured["include_sorry_details"] = args[6]
         return [ReplResponse(id="one", time=0.1, response={"env": 0})]
 
     monkeypatch.setattr("server.routers.backward.run_checks", fake_run_checks)
@@ -167,55 +121,9 @@ def test_api_verify_applies_normalized_policy(
         "codes": [{"custom_id": "one", "code": "#check Nat"}],
         "timeout": 999,
         "disable_cache": True,
-        "include_sorry_details": True,
     }
     resp = root_client.post("/verify", json=payload)
     assert resp.status_code == 200
     assert captured["timeout"] == 60.0
     assert captured["debug"] is False
     assert captured["reuse"] is True
-    assert captured["include_sorry_details"] is True
-
-
-def test_api_verify_returns_rich_sorry_details_when_requested(
-    root_client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def fake_run_checks(*args, **kwargs):  # type: ignore[no-untyped-def]
-        return [
-            ReplResponse(
-                id="one",
-                time=0.1,
-                response={
-                    "env": 0,
-                    "sorries": [
-                        {
-                            "line": 3,
-                            "column": 2,
-                            "endLine": 3,
-                            "endColumn": 7,
-                            "pos": {"line": 3, "column": 2},
-                            "endPos": {"line": 3, "column": 7},
-                            "goal": "⊢ x = x",
-                            "localContext": "x : Int",
-                            "proofState": "x : Int\n⊢ x = x",
-                            "proofStateId": 4,
-                        }
-                    ],
-                },
-            )
-        ]
-
-    monkeypatch.setattr("server.routers.backward.run_checks", fake_run_checks)
-
-    payload = {
-        "codes": [{"custom_id": "one", "code": "theorem foo (x : Int) : x = x := by sorry"}],
-        "include_sorry_details": True,
-    }
-    resp = root_client.post("/verify", json=payload)
-    assert resp.status_code == 200
-    body = resp.json()
-    sorry = body["results"][0]["response"]["sorries"][0]
-    assert sorry["goal"] == "⊢ x = x"
-    assert sorry["localContext"] == "x : Int"
-    assert sorry["proofState"] == "x : Int\n⊢ x = x"
-    assert sorry["proofStateId"] == 4
