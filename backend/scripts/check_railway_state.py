@@ -133,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--worker-cpu", type=int, default=8)
     parser.add_argument("--worker-memory-gb", type=int, default=32)
     parser.add_argument("--api-replicas", type=int, default=1)
-    parser.add_argument("--worker-replicas", type=int, default=3)
+    parser.add_argument("--worker-replicas", type=int, default=6)
     parser.add_argument("--api-sleep", choices=["any", "true", "false"], default="false")
     parser.add_argument("--worker-sleep", choices=["any", "true", "false"], default="any")
     parser.add_argument("--skip-domain-check", action="store_true")

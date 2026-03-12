@@ -302,7 +302,7 @@ def main() -> int:
             "sleepApplication": False,
             "restartPolicyType": "ON_FAILURE",
             "restartPolicyMaxRetries": 3,
-            "multiRegionConfig": {REGION: {"numReplicas": 3}},
+            "multiRegionConfig": {REGION: {"numReplicas": 6}},
         },
     )
     update_limits(client, service_id=worker_id, vcpus=8, memory_gb=32)

@@ -273,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-memory-gb", type=float, default=8.0)
     parser.add_argument("--worker-vcpus", type=float, default=8.0)
     parser.add_argument("--worker-memory-gb", type=float, default=32.0)
-    parser.add_argument("--worker-replicas", type=int, default=3)
+    parser.add_argument("--worker-replicas", type=int, default=6)
 
     parser.add_argument(
         "--output-dir",
