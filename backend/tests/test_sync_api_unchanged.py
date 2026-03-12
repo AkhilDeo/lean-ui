@@ -41,15 +41,3 @@ def test_sync_backward_endpoint_still_exists() -> None:
     with _client() as client:
         resp = client.post("/one_pass_verify_batch", json={})
         assert resp.status_code == 422
-
-
-def test_openapi_exposes_explicit_snippet_outcome_fields() -> None:
-    with _client() as client:
-        schemas = client.get("/api/openapi.json").json()["components"]["schemas"]
-        repl_response = schemas["ReplResponse"]
-        async_poll = schemas["AsyncPollResponse"]
-
-        assert "status" in repl_response["properties"]
-        assert repl_response["properties"]["status"]["$ref"] == "#/components/schemas/SnippetStatus"
-        assert repl_response["properties"]["passed"]["type"] == "boolean"
-        assert async_poll["properties"]["results"]["anyOf"][0]["items"]["$ref"] == "#/components/schemas/ReplResponse"

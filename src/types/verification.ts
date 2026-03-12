@@ -9,19 +9,9 @@ export interface VerificationResult {
   leanVersion: string;
 }
 
-export type SnippetOutcomeStatus =
-  | 'valid'
-  | 'sorry'
-  | 'lean_error'
-  | 'repl_error'
-  | 'timeout_error'
-  | 'server_error';
-
-export interface VerifyApiResponse {
-  status: SnippetOutcomeStatus;
-  passed: boolean;
-  error: string | null;
+export interface KiminaResponse {
+  pass: boolean;
+  complete_proof: string;
+  error?: string;
   warnings?: string[];
-  infos?: string[];
-  time?: number;
 }

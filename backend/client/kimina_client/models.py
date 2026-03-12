@@ -195,38 +195,6 @@ def is_sorry(response: CommandResponse) -> bool:
     return not is_error(response) and has_sorry(response)
 
 
-def analyze_repl_payload(
-    *,
-    snippet_id: str,
-    error: str | None,
-    response: CommandResponse | Error | None,
-    time: float | None = None,
-) -> SnippetAnalysis:
-    if error is not None:
-        if "timed out" in error:
-            return SnippetAnalysis(status=SnippetStatus.timeout_error)
-        return SnippetAnalysis(status=SnippetStatus.server_error)
-
-    if response is None:
-        raise ValueError(
-            f"`ReplResponse` for ID {snippet_id!r} has no response or error, which should not happen. Please report."
-        )
-
-    if "message" in response:
-        return SnippetAnalysis(status=SnippetStatus.repl_error, time=time)
-
-    if is_error(response):
-        return SnippetAnalysis(status=SnippetStatus.lean_error, time=time)
-    if is_valid(response):
-        return SnippetAnalysis(status=SnippetStatus.valid, time=time)
-    if is_sorry(response):
-        return SnippetAnalysis(status=SnippetStatus.sorry, time=time)
-
-    raise ValueError(
-        f"`CommandResponse` for ID {snippet_id!r} is neither valid, nor sorry, nor error, which should not happen. Please report."
-    )
-
-
 class ExtendedCommandResponse(CommandResponse):
     time: float | None
 
@@ -288,14 +256,6 @@ class ReplRequest(BaseRequest):
 class ReplResponse(BaseModel):
     id: str = Field(..., description="Identifier to trace the snippet")
     time: float = 0.0
-    status: SnippetStatus = Field(
-        default=SnippetStatus.server_error,
-        description="Normalized snippet outcome.",
-    )
-    passed: bool = Field(
-        default=False,
-        description="Whether the snippet passed verification without Lean errors or sorry placeholders.",
-    )
     error: str | None = None
     response: CommandResponse | Error | None = None
     diagnostics: Diagnostics | None = None
@@ -323,24 +283,29 @@ class ReplResponse(BaseModel):
             raise ValueError("Only one of `error` or `response` can be set")
         return values
 
-    @model_validator(mode="after")
-    def populate_outcome(self) -> "ReplResponse":
-        analysis = analyze_repl_payload(
-            snippet_id=self.id,
-            error=self.error,
-            response=self.response,
-            time=self.time,
-        )
-        self.status = analysis.status
-        self.passed = analysis.status == SnippetStatus.valid
-        return self
-
     def analyze(self) -> SnippetAnalysis:
-        return analyze_repl_payload(
-            snippet_id=self.id,
-            error=self.error,
-            response=self.response,
-            time=self.time,
+        if self.error is not None:
+            if "timed out" in self.error:
+                return SnippetAnalysis(status=SnippetStatus.timeout_error)
+            return SnippetAnalysis(status=SnippetStatus.server_error)
+
+        if self.response is None:
+            raise ValueError(
+                f"`ReplResponse` for ID {self.id!r} has no response or error, which should not happen. Please report."
+            )
+
+        if "message" in self.response:
+            return SnippetAnalysis(status=SnippetStatus.repl_error, time=self.time)
+
+        if is_error(self.response):
+            return SnippetAnalysis(status=SnippetStatus.lean_error, time=self.time)
+        if is_valid(self.response):
+            return SnippetAnalysis(status=SnippetStatus.valid, time=self.time)
+        if is_sorry(self.response):
+            return SnippetAnalysis(status=SnippetStatus.sorry, time=self.time)
+
+        raise ValueError(
+            f"`CommandResponse` for ID {self.id!r} is neither valid, nor sorry, nor error, which should not happen. Please report."
         )
 
 

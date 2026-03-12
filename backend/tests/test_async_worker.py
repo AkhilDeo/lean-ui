@@ -30,9 +30,7 @@ async def test_worker_process_task_success(monkeypatch: pytest.MonkeyPatch) -> N
     assert poll is not None
     assert poll.progress.done == 1
     assert poll.results is not None
-    assert poll.results[0].id == "s1"
-    assert poll.results[0].status.value == "valid"
-    assert poll.results[0].passed is True
+    assert poll.results[0]["id"] == "s1"
 
 
 @pytest.mark.asyncio
@@ -57,10 +55,7 @@ async def test_worker_process_task_http_error(monkeypatch: pytest.MonkeyPatch) -
     assert poll is not None
     assert poll.progress.failed == 1
     assert poll.results is not None
-    assert poll.results[0].status.value == "server_error"
-    assert poll.results[0].passed is False
-    assert poll.results[0].error is not None
-    assert "No available REPLs" in poll.results[0].error
+    assert "No available REPLs" in poll.results[0]["error"]
     assert calls["n"] == 3
 
 
@@ -91,9 +86,7 @@ async def test_worker_retries_transient_http_then_succeeds(
     assert poll.progress.done == 1
     assert poll.progress.failed == 0
     assert poll.results is not None
-    assert poll.results[0].id == "s1"
-    assert poll.results[0].status.value == "valid"
-    assert poll.results[0].passed is True
+    assert poll.results[0]["id"] == "s1"
     assert calls["n"] == 2
 
 

@@ -102,9 +102,6 @@ def test_api_check_applies_normalized_policy(
     assert captured["timeout"] == 60.0
     assert captured["debug"] is False
     assert captured["reuse"] is True
-    body = resp.json()
-    assert body["results"][0]["status"] == "valid"
-    assert body["results"][0]["passed"] is True
 
 
 def test_api_verify_applies_normalized_policy(

@@ -209,9 +209,7 @@ async def test_submit_and_complete_single_job() -> None:
     assert done.status == AsyncJobStatus.completed
     assert done.progress.done == 1
     assert done.results is not None
-    assert done.results[0].id == "s1"
-    assert done.results[0].status.value == "valid"
-    assert done.results[0].passed is True
+    assert done.results[0]["id"] == "s1"
 
 
 @pytest.mark.asyncio
@@ -240,7 +238,7 @@ async def test_batch_preserves_result_order() -> None:
     done = await jobs.poll(submit.job_id)
     assert done is not None
     assert done.results is not None
-    assert [item.id for item in done.results] == ["a", "b"]
+    assert [item["id"] for item in done.results] == ["a", "b"]
 
 
 @pytest.mark.asyncio
@@ -352,4 +350,4 @@ async def test_redis_duplicate_completion_after_recovery_is_ignored() -> None:
     assert poll.progress.done == 1
     assert poll.progress.failed == 0
     assert poll.results is not None
-    assert poll.results[0].response == {"env": 0}
+    assert poll.results[0]["response"] == {"env": 0}

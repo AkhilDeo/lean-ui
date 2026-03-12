@@ -56,7 +56,7 @@ class AsyncPollResponse(BaseModel):
     job_id: str
     status: AsyncJobStatus
     progress: AsyncProgress
-    results: list[ReplResponse] | None = None
+    results: list[dict[str, Any]] | None = None
     created_at: str
     updated_at: str
     expires_at: str
@@ -339,15 +339,15 @@ class RedisAsyncJobs:
         failed = int(meta.get("failed", 0))
         running = int(meta.get("running", 0))
 
-        results: list[ReplResponse] | None = None
+        results: list[dict[str, Any]] | None = None
         if status in {AsyncJobStatus.completed, AsyncJobStatus.failed}:
             raw = await self.redis.lrange(self._results_key(job_id), 0, -1)
-            parsed: list[ReplResponse] = []
+            parsed: list[dict[str, Any]] = []
             for item in raw:
                 value = item.decode("utf-8") if isinstance(item, bytes) else str(item)
                 if not value:
                     continue
-                parsed.append(ReplResponse.model_validate(deserialize_result(value)))
+                parsed.append(deserialize_result(value))
             if len(parsed) == total:
                 results = parsed
         job_logger.debug(
@@ -772,12 +772,10 @@ class InMemoryAsyncJobs:
                 job_logger.warning("Async poll miss (in-memory): job_id={}", job_id)
                 return None
             results = self._results.get(job_id, [])
-            finalized: list[ReplResponse] | None = None
+            finalized = None
             if meta["status"] in {AsyncJobStatus.completed, AsyncJobStatus.failed}:
                 if all(r is not None for r in results):
-                    finalized = [
-                        ReplResponse.model_validate(r) for r in results if r is not None
-                    ]
+                    finalized = [r for r in results if r is not None]
             job_logger.debug(
                 "Async poll hit (in-memory): job_id={} status={} done={} failed={} running={} total={} has_results={}",
                 job_id,

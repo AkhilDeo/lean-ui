@@ -6,9 +6,10 @@ import { CodeEditor } from './CodeEditor';
 import { VerificationPanel } from './VerificationPanel';
 import { HistorySidebar } from './HistorySidebar';
 import { useVerificationHistory } from '@/hooks/useVerificationHistory';
-import { VerificationResult, VerifyApiResponse } from '@/types/verification';
+import { VerificationResult } from '@/types/verification';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
 import {
   Dialog,
   DialogContent,
@@ -78,7 +79,7 @@ export function LeanVerifier() {
         body: JSON.stringify({ code }),
       });
 
-      const result: VerifyApiResponse = await response.json();
+      const result = await response.json();
 
       const errors: string[] = [];
       const warnings: string[] = [];
@@ -92,12 +93,15 @@ export function LeanVerifier() {
       }
 
       let status: VerificationResult['status'] = 'success';
-      if (result.status === 'sorry') {
-        status = 'warning';
-      } else if (!result.passed || errors.length > 0) {
+      if (errors.length > 0) {
         status = 'error';
       } else if (warnings.length > 0) {
         status = 'warning';
+      } else if (!result.pass) {
+        status = 'error';
+        if (!result.error) {
+          errors.push('Verification failed');
+        }
       }
 
       const updatedResult: Partial<VerificationResult> = {
@@ -119,7 +123,7 @@ export function LeanVerifier() {
     } finally {
       setIsVerifying(false);
     }
-  }, [code, title, addVerification, updateVerification]);
+  }, [code, title, history.length, addVerification, updateVerification]);
 
   const handleSelectHistory = useCallback(
     (id: string) => {
