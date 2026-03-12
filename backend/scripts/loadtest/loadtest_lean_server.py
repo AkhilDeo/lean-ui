@@ -7,6 +7,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -18,8 +19,47 @@ import aiohttp
 RETRYABLE_HTTP = {408, 425, 429, 500, 502, 503, 504}
 TERMINAL_ASYNC_STATES = {"completed", "failed", "expired"}
 DEFAULT_CODE_FIELDS = ("prompt", "code", "proof", "lean_code", "snippet", "text")
-FAILED_LABEL_POLICIES = {"strict_invalid", "transport_failure", "split_by_error"}
+FAILED_LABEL_POLICIES = {
+    "semantic_only",
+    "split_by_error",
+    "strict_invalid",
+    "transport_failure",
+}
 RAMP_HOLD_SECONDS = {25: 120.0, 50: 180.0, 100: 180.0, 250: 300.0}
+TRANSPORT_FAILURE_SIGNALS = (
+    "timed out",
+    "timeout",
+    "transport_error",
+    "connectionerror",
+    "connection reset",
+    "connection refused",
+    "failed to start repl",
+    "failed to acquire repl",
+    "no available repl",
+    "worker_error",
+    "header command timed out",
+    "job_not_found_or_expired",
+    "poll_timeout",
+)
+SEMANTIC_FAILURE_SIGNALS = (
+    "unexpected token",
+    "unexpected end of input",
+    "unsolved goals",
+    "type mismatch",
+    "application type mismatch",
+    "invalid field",
+    "invalid argument",
+    "unknown constant",
+    "unknown identifier",
+    "unknown tactic",
+    "function expected",
+    "declaration has metavariables",
+    "tactic ",
+    "expected ':='",
+    "expected term",
+    "kernel",
+    "synth",
+)
 
 
 @dataclass(frozen=True)
@@ -157,6 +197,27 @@ def quantiles(values: list[float]) -> dict[str, float]:
 
 
 def _extract_code(row: Any, code_fields: tuple[str, ...]) -> str | None:
+    def _markdown_code(text: str) -> str | None:
+        match = re.search(r"```(?:[A-Za-z0-9_+-]+)?\n(.*?)```", text, flags=re.DOTALL)
+        if not match:
+            return None
+        code = match.group(1).strip("\n\r")
+        return code or None
+
+    def _clean_code_text(text: str) -> str:
+        code = _markdown_code(text)
+        if code is not None:
+            return code
+        return text.strip()
+
+    def _dedent_block(text: str) -> str:
+        lines = text.splitlines()
+        non_empty = [line for line in lines if line.strip()]
+        if not non_empty:
+            return text
+        indent = min(len(line) - len(line.lstrip()) for line in non_empty)
+        return "\n".join(line[indent:] if line.strip() else "" for line in lines)
+
     if isinstance(row, str):
         text = row.strip()
         return text if text else None
@@ -165,16 +226,29 @@ def _extract_code(row: Any, code_fields: tuple[str, ...]) -> str | None:
         prompt = row.get("prompt")
         response = row.get("response")
         if isinstance(prompt, str) and isinstance(response, str):
-            prompt_text = prompt.strip()
-            response_text = response.strip()
+            prompt_text = _clean_code_text(prompt)
+            response_text = _clean_code_text(response)
             if prompt_text and response_text:
-                sorry_idx = prompt_text.rfind("sorry")
-                if sorry_idx >= 0:
-                    return (
-                        prompt_text[:sorry_idx]
-                        + response_text
-                        + prompt_text[sorry_idx + len("sorry") :]
+                sorry_matches = list(re.finditer(r"(?m)^([ \t]*)sorry\b", prompt_text))
+                if sorry_matches:
+                    match = sorry_matches[-1]
+                    indent = match.group(1)
+                    normalized = _dedent_block(response_text)
+                    replacement = "\n".join(
+                        f"{indent}{line}" if line else ""
+                        for line in normalized.splitlines()
                     )
+                    return (
+                        prompt_text[: match.start()]
+                        + replacement
+                        + prompt_text[match.end() :]
+                    )
+                if (
+                    re.search(r"\b(theorem|lemma|example)\b", prompt_text)
+                    and ":=" not in prompt_text
+                    and not prompt_text.rstrip().endswith("by")
+                ):
+                    return f"{prompt_text} := by\n{response_text}"
                 return f"{prompt_text}\n{response_text}"
         for field in code_fields:
             value = row.get(field)
@@ -198,17 +272,14 @@ def classify_failed_label_kind(
         return "transport_failure"
 
     error = (verification_error or "").strip().lower()
+    if any(signal in error for signal in TRANSPORT_FAILURE_SIGNALS):
+        return "transport_failure"
+    if policy_normalized == "semantic_only":
+        if error and any(signal in error for signal in SEMANTIC_FAILURE_SIGNALS):
+            return "semantic_invalid"
+        return "nonsemantic_failure"
     if not error:
         return "semantic_invalid"
-    timeout_signals = (
-        "timed out",
-        "transport_error",
-        "connectionerror",
-        "header command timed out",
-        "timeout",
-    )
-    if any(signal in error for signal in timeout_signals):
-        return "transport_failure"
     return "semantic_invalid"
 
 
@@ -276,6 +347,7 @@ def apply_failed_label_policy(
     policy: str,
 ) -> tuple[list[Case], dict[str, Any]]:
     label_counts: Counter[str] = Counter()
+    excluded_label_counts: Counter[str] = Counter()
     error_counter: Counter[str] = Counter()
     bucket_counter: Counter[str] = Counter()
     relabeled: list[Case] = []
@@ -288,19 +360,24 @@ def apply_failed_label_policy(
             error_counter["<missing>"] += 1
 
         kind = classify_failed_label_kind(case.verification_error, policy)
-        label_counts[kind] += 1
-        bucket = (
-            "transport_timeout_or_header_timeout"
-            if kind == "transport_failure"
-            else "true_lean_invalid_or_parse_error"
-        )
+        include_case = not (policy == "semantic_only" and kind != "semantic_invalid")
+        target_counts = label_counts if include_case else excluded_label_counts
+        target_counts[kind] += 1
+        bucket = "true_lean_invalid_or_parse_error"
+        if kind == "transport_failure":
+            bucket = "transport_timeout_or_header_timeout"
+        elif kind == "nonsemantic_failure":
+            bucket = "excluded_nonsemantic_failure"
         bucket_counter[bucket] += 1
+
+        if not include_case:
+            continue
 
         relabeled.append(
             Case(
                 case_id=case.case_id,
                 code=case.code,
-                expected_valid=(kind == "semantic_valid"),
+                expected_valid=False,
                 source=case.source,
                 label_kind=kind,
                 verification_error=case.verification_error,
@@ -310,6 +387,9 @@ def apply_failed_label_policy(
     return relabeled, {
         "label_policy": policy,
         "label_kind_counts": dict(label_counts),
+        "excluded_label_kind_counts": dict(excluded_label_counts),
+        "included_case_count": len(relabeled),
+        "excluded_case_count": sum(excluded_label_counts.values()),
         "bucket_counts": dict(bucket_counter),
         "verification_error_counts": dict(error_counter),
     }
@@ -322,6 +402,7 @@ def build_cases(
     max_verified: int,
     max_failed: int,
     seed: int,
+    balance_classes: bool = False,
 ) -> list[Case]:
     rng = random.Random(seed)
     verified = list(verified_cases)
@@ -333,6 +414,17 @@ def build_cases(
         verified = verified[:max_verified]
     if max_failed > 0:
         failed = failed[:max_failed]
+
+    if balance_classes:
+        if not verified or not failed:
+            raise ValueError("Balanced case selection requires both verified and failed cases.")
+        target = min(len(verified), len(failed))
+        verified = verified[:target]
+        failed = failed[:target]
+        interleaved: list[Case] = []
+        for verified_case, failed_case in zip(verified, failed):
+            interleaved.extend((verified_case, failed_case))
+        return interleaved
 
     cases = verified + failed
     rng.shuffle(cases)
@@ -988,12 +1080,22 @@ def checks_for_tier(
 
     if fail_on_accuracy:
         rates = metrics["accuracy"]["rates"]
+        sample_sizes = metrics["accuracy"]["sample_sizes"]
         vtpr = rates["valid_true_positive_rate"]
         itnr = rates["invalid_true_negative_rate"]
         overall = rates["overall_accuracy"]
-        checks["accuracy_valid_tpr"] = vtpr is not None and vtpr >= thresholds.min_valid_tpr
-        checks["accuracy_invalid_tnr"] = itnr is not None and itnr >= thresholds.min_invalid_tnr
-        checks["accuracy_overall"] = overall is not None and overall >= thresholds.min_overall_accuracy
+        semantic_valid = int(sample_sizes["semantic_valid"])
+        semantic_invalid = int(sample_sizes["semantic_invalid"])
+        semantic_total = int(sample_sizes["semantic_total"])
+        checks["accuracy_valid_tpr"] = (
+            True if semantic_valid == 0 else vtpr is not None and vtpr >= thresholds.min_valid_tpr
+        )
+        checks["accuracy_invalid_tnr"] = (
+            True if semantic_invalid == 0 else itnr is not None and itnr >= thresholds.min_invalid_tnr
+        )
+        checks["accuracy_overall"] = (
+            True if semantic_total == 0 else overall is not None and overall >= thresholds.min_overall_accuracy
+        )
 
     return checks
 
@@ -1389,15 +1491,24 @@ async def main_async(args: argparse.Namespace) -> int:
         policy=args.failed_label_policy,
     )
 
+    balance_classes = args.run_type == "accuracy"
     base_cases = build_cases(
         verified_cases,
         failed_cases,
         max_verified=args.max_verified,
         max_failed=args.max_failed,
         seed=args.seed,
+        balance_classes=balance_classes,
     )
     if not base_cases:
         raise ValueError("No test cases generated from datasets.")
+    if args.run_type == "accuracy":
+        semantic_valid = sum(1 for case in base_cases if case.label_kind == "semantic_valid")
+        semantic_invalid = sum(1 for case in base_cases if case.label_kind == "semantic_invalid")
+        if semantic_valid == 0 or semantic_invalid == 0:
+            raise ValueError(
+                "Accuracy runs require at least one semantic_valid and one semantic_invalid case."
+            )
 
     timeout = aiohttp.ClientTimeout(total=max(args.lean_timeout + 30, args.poll_timeout_s + 30))
     tier_results: list[dict[str, Any]] = []
@@ -1487,6 +1598,8 @@ async def main_async(args: argparse.Namespace) -> int:
             "verified_cases_loaded": len(verified_cases),
             "failed_cases_loaded": len(failed_cases),
             "pool_size": len(base_cases),
+            "pool_class_counts": dict(Counter(case.label_kind for case in base_cases)),
+            "balanced_sampling": balance_classes,
             "seed": args.seed,
         },
         "async_observability": {
@@ -1529,6 +1642,7 @@ async def main_async(args: argparse.Namespace) -> int:
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = out_dir / "case_manifest.json"
     summary_path = out_dir / "verification_loadtest_summary.json"
     calibrated_summary_path = out_dir / "verification_loadtest_summary_calibrated.json"
     results_path = out_dir / "verification_loadtest_results.jsonl"
@@ -1540,6 +1654,20 @@ async def main_async(args: argparse.Namespace) -> int:
     calibrated_summary_path.write_text(payload, encoding="utf-8")
     breakdown_path.write_text(
         json.dumps(failed_breakdown, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    manifest_payload = [
+        {
+            "case_id": case.case_id,
+            "expected_valid": case.expected_valid,
+            "label_kind": case.label_kind,
+            "source": case.source,
+            "verification_error": case.verification_error,
+        }
+        for case in base_cases
+    ]
+    manifest_path.write_text(
+        json.dumps(manifest_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 

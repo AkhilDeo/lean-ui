@@ -84,6 +84,67 @@ def test_load_jsonl_cases_combines_prompt_response(tmp_path: Path) -> None:
     assert cases[0].code == "theorem t : True := by\n  trivial"
 
 
+def test_load_jsonl_cases_extracts_fenced_prompt_and_response(tmp_path: Path) -> None:
+    path = tmp_path / "proof_sft_fenced.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "prompt": (
+                    "Complete the following Lean 4 theorem by providing a proof.\n\n"
+                    "```lean4\n"
+                    "theorem t : True := by\n"
+                    "  sorry\n"
+                    "```"
+                ),
+                "response": "```lean4\n  trivial\n```",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cases, stats = load_jsonl_cases(
+        path,
+        expected_valid=True,
+        id_prefix="verified",
+        code_fields=("prompt",),
+    )
+
+    assert stats.parsed_rows == 1
+    assert len(cases) == 1
+    assert cases[0].code == "theorem t : True := by\n  trivial"
+
+
+def test_load_jsonl_cases_inserts_by_for_theorem_statement_prompts(tmp_path: Path) -> None:
+    path = tmp_path / "proof_sft_statement_only.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "prompt": (
+                    "Complete the following Lean 4 theorem by providing a proof.\n\n"
+                    "```lean4\n"
+                    "theorem t : True\n"
+                    "```"
+                ),
+                "response": "```lean4\n  trivial\n```",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cases, stats = load_jsonl_cases(
+        path,
+        expected_valid=True,
+        id_prefix="verified",
+        code_fields=("prompt",),
+    )
+
+    assert stats.parsed_rows == 1
+    assert len(cases) == 1
+    assert cases[0].code == "theorem t : True := by\n  trivial"
+
+
 def test_build_cases_respects_maximums() -> None:
     verified = [Case(case_id=f"v-{i}", code="#check Nat", expected_valid=True, source="v") for i in range(10)]
     failed = [Case(case_id=f"f-{i}", code="example : False := by trivial", expected_valid=False, source="f") for i in range(8)]
@@ -92,6 +153,22 @@ def test_build_cases_respects_maximums() -> None:
     assert len(cases) == 7
     assert sum(1 for c in cases if c.expected_valid) == 4
     assert sum(1 for c in cases if not c.expected_valid) == 3
+
+
+def test_build_cases_balances_classes_for_accuracy() -> None:
+    verified = [Case(case_id=f"v-{i}", code="#check Nat", expected_valid=True, source="v") for i in range(4)]
+    failed = [Case(case_id=f"f-{i}", code="example : False := by trivial", expected_valid=False, source="f") for i in range(2)]
+
+    cases = build_cases(
+        verified,
+        failed,
+        max_verified=4,
+        max_failed=2,
+        seed=123,
+        balance_classes=True,
+    )
+
+    assert [case.expected_valid for case in cases] == [True, False, True, False]
 
 
 def test_failed_label_policy_split_by_error() -> None:
@@ -106,11 +183,29 @@ def test_failed_label_policy_split_by_error() -> None:
     assert breakdown["bucket_counts"]["true_lean_invalid_or_parse_error"] == 1
 
 
+def test_failed_label_policy_semantic_only_filters_transport_and_ambiguous_errors() -> None:
+    cases = [
+        Case("f-1", "#check Nat", False, "failed", "semantic_invalid", "Lean REPL header command timed out in 60.0 seconds"),
+        Case("f-2", "example : False := by trivial", False, "failed", "semantic_invalid", "unexpected token"),
+        Case("f-3", "example : False := by trivial", False, "failed", "semantic_invalid", None),
+    ]
+    relabeled, breakdown = apply_failed_label_policy(cases, policy="semantic_only")
+
+    assert [case.case_id for case in relabeled] == ["f-2"]
+    assert breakdown["included_case_count"] == 1
+    assert breakdown["excluded_case_count"] == 2
+    assert breakdown["excluded_label_kind_counts"]["transport_failure"] == 1
+    assert breakdown["excluded_label_kind_counts"]["nonsemantic_failure"] == 1
+
+
 def test_classify_failed_label_kind_policies() -> None:
     assert classify_failed_label_kind("Lean REPL header command timed out in 60.0 seconds", "split_by_error") == "transport_failure"
     assert classify_failed_label_kind("unexpected token", "split_by_error") == "semantic_invalid"
     assert classify_failed_label_kind("anything", "strict_invalid") == "semantic_invalid"
     assert classify_failed_label_kind("anything", "transport_failure") == "transport_failure"
+    assert classify_failed_label_kind("unexpected token", "semantic_only") == "semantic_invalid"
+    assert classify_failed_label_kind("Lean REPL header command timed out in 60.0 seconds", "semantic_only") == "transport_failure"
+    assert classify_failed_label_kind(None, "semantic_only") == "nonsemantic_failure"
 
 
 def test_classify_repl_result_variants() -> None:
@@ -180,6 +275,21 @@ def test_compute_tier_metrics_and_checks() -> None:
     )
     assert checks["sync_p99"] is False
     assert checks["sync_429_rate"] is False
+
+
+def test_checks_for_tier_skips_invalid_tnr_without_semantic_invalid_cases() -> None:
+    rows = [EvalRow("sync", 10, "v-1", True, True, False, 100.0, 200, label_kind="semantic_valid")]
+    metrics = compute_tier_metrics(rows, [100.0])
+    checks = checks_for_tier(
+        mode="sync",
+        metrics=metrics,
+        thresholds=Thresholds(),
+        fail_on_accuracy=True,
+        fail_on_performance=False,
+    )
+    assert checks["accuracy_invalid_tnr"] is True
+    assert checks["accuracy_valid_tpr"] is True
+    assert checks["accuracy_overall"] is True
 
 
 def test_async_severe_failure_reasons_includes_queue_stall() -> None:
