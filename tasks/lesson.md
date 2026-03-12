@@ -12,6 +12,11 @@ Capture a new entry after every user correction.
 ## Entries
 - Add newest entries at the top.
 - Date: 2026-03-12
+- Correction received: Do not ship `tasks/todo.md`; remove it and keep the correction log in `tasks/lesson.md`.
+- Root cause: I carried forward the repo's older task-tracking pattern into the release commit instead of following the corrected file layout the user wanted.
+- New preventive rule: For this repo, do not add or keep `tasks/todo.md`; record corrections in `tasks/lesson.md` instead.
+- Where applied: `tasks/todo.md`, `tasks/lessons.md`, `tasks/lesson.md`, and this production release pass.
+- Date: 2026-03-12
 - Correction received: Ignore transient validation artifacts like `.coverage` and `backend/outputs/` before committing release work instead of leaving them as untracked noise in the ship path.
 - Root cause: I treated local verification byproducts as harmless leftovers and did not immediately fold repo hygiene into the release workflow.
 - New preventive rule: Before commit/push/deploy work in this repo, add any new transient validation artifacts to `.gitignore` and keep them out of release commits.
