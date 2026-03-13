@@ -12,7 +12,9 @@ from server.async_jobs import (
     InMemoryAsyncJobs,
     RedisAsyncJobs,
 )
+from server.async_tiering import AsyncQueueTier
 from server.async_queue import RedisTaskQueue
+from server.settings import Settings
 
 
 class FakePipeline:
@@ -173,13 +175,25 @@ class FakeRedis:
 
 def make_redis_jobs() -> RedisAsyncJobs:
     redis = FakeRedis()
+    settings = Settings(_env_file=None)
     return RedisAsyncJobs(
         redis=redis,  # type: ignore[arg-type]
-        queue=RedisTaskQueue(redis=redis, queue_name="lean_async_check"),  # type: ignore[arg-type]
-        queue_name="lean_async_check",
+        queues={
+            AsyncQueueTier.light: RedisTaskQueue(
+                redis=redis, queue_name="lean_async_light"
+            ),
+            AsyncQueueTier.heavy: RedisTaskQueue(
+                redis=redis, queue_name="lean_async_heavy"
+            ),
+        },  # type: ignore[arg-type]
+        queue_names={
+            AsyncQueueTier.light: "lean_async_light",
+            AsyncQueueTier.heavy: "lean_async_heavy",
+        },
         key_prefix="lean_async",
         ttl_sec=3600,
         backlog_limit=100,
+        settings=settings,
     )
 
 
@@ -187,7 +201,9 @@ def make_redis_jobs() -> RedisAsyncJobs:
 async def test_submit_and_complete_single_job() -> None:
     jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
     submit = await jobs.submit(
-        CheckRequest(snippets=[Snippet(id="s1", code="#check Nat")], timeout=30)
+        CheckRequest(
+            snippets=[Snippet(id="s1", code="import Mathlib\n#check Nat")], timeout=30
+        )
     )
     assert submit.status == AsyncJobStatus.queued
 
@@ -210,8 +226,7 @@ async def test_submit_and_complete_single_job() -> None:
     assert done.progress.done == 1
     assert done.results is not None
     assert done.results[0].id == "s1"
-    assert done.results[0].status.value == "valid"
-    assert done.results[0].passed is True
+    assert done.results[0].analyze().status.value == "valid"
 
 
 @pytest.mark.asyncio
@@ -220,8 +235,8 @@ async def test_batch_preserves_result_order() -> None:
     submit = await jobs.submit(
         CheckRequest(
             snippets=[
-                Snippet(id="a", code="#check Nat"),
-                Snippet(id="b", code="#check Int"),
+                Snippet(id="a", code="import Mathlib\n#check Nat"),
+                Snippet(id="b", code="import Mathlib\n#check Int"),
             ],
             timeout=30,
         )
@@ -247,11 +262,15 @@ async def test_batch_preserves_result_order() -> None:
 async def test_backlog_limit_rejected() -> None:
     jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=1)
     await jobs.submit(
-        CheckRequest(snippets=[Snippet(id="s1", code="#check Nat")], timeout=30)
+        CheckRequest(
+            snippets=[Snippet(id="s1", code="import Mathlib\n#check Nat")], timeout=30
+        )
     )
     with pytest.raises(AsyncBacklogFullError):
         await jobs.submit(
-            CheckRequest(snippets=[Snippet(id="s2", code="#check Int")], timeout=30)
+            CheckRequest(
+                snippets=[Snippet(id="s2", code="import Mathlib\n#check Int")], timeout=30
+            )
         )
 
 
@@ -262,7 +281,7 @@ async def test_in_memory_metrics_reflect_queue_and_running() -> None:
         CheckRequest(
             snippets=[
                 Snippet(id="s1", code="#check Nat"),
-                Snippet(id="s2", code="#check Int"),
+                Snippet(id="s2", code="import Mathlib\n#check Int"),
             ],
             timeout=30,
         )
@@ -296,8 +315,8 @@ async def test_redis_recovery_requeues_running_tasks_only() -> None:
     submit = await jobs.submit(
         CheckRequest(
             snippets=[
-                Snippet(id="s1", code="#check Nat"),
-                Snippet(id="s2", code="#check Int"),
+                Snippet(id="s1", code="import Mathlib\n#check Nat"),
+                Snippet(id="s2", code="import Mathlib\n#check Int"),
             ],
             timeout=30,
         )
@@ -328,7 +347,9 @@ async def test_redis_recovery_requeues_running_tasks_only() -> None:
 async def test_redis_duplicate_completion_after_recovery_is_ignored() -> None:
     jobs = make_redis_jobs()
     submit = await jobs.submit(
-        CheckRequest(snippets=[Snippet(id="s1", code="#check Nat")], timeout=30)
+        CheckRequest(
+            snippets=[Snippet(id="s1", code="import Mathlib\n#check Nat")], timeout=30
+        )
     )
 
     original = await jobs.dequeue_task(timeout_sec=1)
@@ -353,3 +374,41 @@ async def test_redis_duplicate_completion_after_recovery_is_ignored() -> None:
     assert poll.progress.failed == 0
     assert poll.results is not None
     assert poll.results[0].response == {"env": 0}
+
+
+@pytest.mark.asyncio
+async def test_submit_routes_light_and_heavy_tasks_to_separate_queues() -> None:
+    jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
+    submit = await jobs.submit(
+        CheckRequest(
+            snippets=[
+                Snippet(id="light", code="import Mathlib\n#check Nat"),
+                Snippet(id="heavy", code="import Mathlib\nimport Aesop\n#check Nat"),
+            ],
+            timeout=30,
+        )
+    )
+
+    light = await jobs.dequeue_task(timeout_sec=1, queue_tier=AsyncQueueTier.light)
+    heavy = await jobs.dequeue_task(timeout_sec=1, queue_tier=AsyncQueueTier.heavy)
+    assert light is not None and heavy is not None
+    assert light.snippet.id == "light"
+    assert heavy.snippet.id == "heavy"
+
+    await jobs.mark_task_started(heavy)
+    await jobs.mark_task_success(
+        heavy, ReplResponse(id="heavy", time=0.1, response={"env": 0})
+    )
+    await jobs.mark_task_started(light)
+    await jobs.mark_task_success(
+        light, ReplResponse(id="light", time=0.1, response={"env": 0})
+    )
+
+    poll = await jobs.poll(submit.job_id)
+    assert poll is not None
+    assert poll.results is not None
+    assert [item.id for item in poll.results] == ["light", "heavy"]
+
+    metrics = await jobs.metrics()
+    assert metrics.tiers is not None
+    assert set(metrics.tiers) == {"light", "heavy"}

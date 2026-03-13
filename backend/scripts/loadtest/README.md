@@ -40,7 +40,7 @@ Artifacts are written to `backend/outputs/loadtests/verification/`.
 ```bash
 python backend/scripts/verify_async_redis_health.py \
   --redis-url "$LEAN_SERVER_REDIS_URL" \
-  --queue-name lean_async_check
+  --queue-name lean_async_light
 ```
 
 ## Railway Tuning (Dry Run)

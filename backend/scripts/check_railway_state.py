@@ -112,7 +112,8 @@ def assert_parity(api_vars: dict[str, str], worker_vars: dict[str, str]) -> None
     required_shared = [
         "LEAN_SERVER_ASYNC_ENABLED",
         "LEAN_SERVER_REDIS_URL",
-        "LEAN_SERVER_ASYNC_QUEUE_NAME",
+        "LEAN_SERVER_ASYNC_QUEUE_NAME_LIGHT",
+        "LEAN_SERVER_ASYNC_QUEUE_NAME_HEAVY",
     ]
     for key in required_shared:
         if not api_vars.get(key) or not worker_vars.get(key):

@@ -66,8 +66,9 @@ def create_app(settings: Settings) -> FastAPI:
         if settings.async_enabled:
             app.state.async_jobs = await create_async_jobs(settings)
             logger.info(
-                "Async queue API enabled: queue='{}' metrics_enabled={}",
-                settings.async_queue_name,
+                "Async queue API enabled: queues=['{}','{}'] metrics_enabled={}",
+                settings.async_queue_name_light,
+                settings.async_queue_name_heavy,
                 settings.async_metrics_enabled,
             )
 

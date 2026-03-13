@@ -20,12 +20,15 @@ class AsyncTaskPayload(BaseModel):
     task_id: str
     index: int
     snippet: Snippet
+    queue_tier: str
     timeout: float
     debug: bool
     reuse: bool
     infotree: Infotree | None = None
     include_sorry_details: bool = False
     enqueued_at: str
+    retry_count: int = 0
+    failure_reason: str | None = None
 
     @classmethod
     def create(
@@ -35,6 +38,7 @@ class AsyncTaskPayload(BaseModel):
         task_id: str,
         index: int,
         snippet: Snippet,
+        queue_tier: str,
         timeout: float,
         debug: bool,
         reuse: bool,
@@ -46,6 +50,7 @@ class AsyncTaskPayload(BaseModel):
             task_id=task_id,
             index=index,
             snippet=snippet,
+            queue_tier=queue_tier,
             timeout=timeout,
             debug=debug,
             reuse=reuse,

@@ -42,7 +42,8 @@ async def test_async_submit_poll_lifecycle() -> None:
             headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload = CheckRequest(
-                snippets=[Snippet(id="one", code="#check Nat")], timeout=30
+                snippets=[Snippet(id="one", code="import Mathlib\n#check Nat")],
+                timeout=30,
             ).model_dump()
             submit = await client.post("/async/check", json=payload)
             assert submit.status_code == 200
@@ -83,8 +84,8 @@ async def test_async_submit_batch_final_results_ordered() -> None:
         ) as client:
             payload = CheckRequest(
                 snippets=[
-                    Snippet(id="a", code="#check Nat"),
-                    Snippet(id="b", code="#check Int"),
+                    Snippet(id="a", code="import Mathlib\n#check Nat"),
+                    Snippet(id="b", code="import Mathlib\n#check Int"),
                 ],
                 timeout=30,
             ).model_dump()
@@ -122,7 +123,8 @@ async def test_async_poll_serializes_failure_outcome_fields() -> None:
             headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload = CheckRequest(
-                snippets=[Snippet(id="one", code="#check Nat")], timeout=30
+                snippets=[Snippet(id="one", code="import Mathlib\n#check Nat")],
+                timeout=30,
             ).model_dump()
             submit = await client.post("/async/check", json=payload)
             assert submit.status_code == 200
@@ -155,10 +157,12 @@ async def test_async_backlog_limit_returns_429() -> None:
             headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload1 = CheckRequest(
-                snippets=[Snippet(id="one", code="#check Nat")], timeout=30
+                snippets=[Snippet(id="one", code="import Mathlib\n#check Nat")],
+                timeout=30,
             ).model_dump()
             payload2 = CheckRequest(
-                snippets=[Snippet(id="two", code="#check Int")], timeout=30
+                snippets=[Snippet(id="two", code="import Mathlib\n#check Int")],
+                timeout=30,
             ).model_dump()
             first = await client.post("/async/check", json=payload1)
             assert first.status_code == 200
@@ -191,7 +195,7 @@ async def test_async_submit_policy_normalizes_timeout_debug_and_reuse() -> None:
             headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload = CheckRequest(
-                snippets=[Snippet(id="one", code="#check Nat")],
+                snippets=[Snippet(id="one", code="import Mathlib\n#check Nat")],
                 timeout=999,
                 debug=True,
                 reuse=False,
@@ -237,8 +241,8 @@ async def test_async_metrics_track_inflight_jobs_and_running_tasks() -> None:
         ) as client:
             payload = CheckRequest(
                 snippets=[
-                    Snippet(id="one", code="#check Nat"),
-                    Snippet(id="two", code="#check Int"),
+                    Snippet(id="one", code="import Mathlib\n#check Nat"),
+                    Snippet(id="two", code="import Mathlib\n#check Int"),
                 ],
                 timeout=30,
             ).model_dump()
@@ -306,10 +310,12 @@ async def test_async_admission_soft_limit_returns_429() -> None:
             headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload1 = CheckRequest(
-                snippets=[Snippet(id="one", code="#check Nat")], timeout=30
+                snippets=[Snippet(id="one", code="import Mathlib\n#check Nat")],
+                timeout=30,
             ).model_dump()
             payload2 = CheckRequest(
-                snippets=[Snippet(id="two", code="#check Int")], timeout=30
+                snippets=[Snippet(id="two", code="import Mathlib\n#check Int")],
+                timeout=30,
             ).model_dump()
             first = await client.post("/async/check", json=payload1)
             assert first.status_code == 200
@@ -328,7 +334,8 @@ async def test_async_poll_wait_sec_long_polling() -> None:
             headers={"Authorization": "Bearer test-key"},
         ) as client:
             payload = CheckRequest(
-                snippets=[Snippet(id="one", code="#check Nat")], timeout=30
+                snippets=[Snippet(id="one", code="import Mathlib\n#check Nat")],
+                timeout=30,
             ).model_dump()
             submit = await client.post("/async/check", json=payload)
             assert submit.status_code == 200
@@ -352,3 +359,36 @@ async def test_async_poll_wait_sec_long_polling() -> None:
 
             assert poll.status_code == 200
             assert poll.json()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_async_metrics_include_light_and_heavy_tiers() -> None:
+    app = _build_app()
+
+    async with LifespanManager(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver/api",
+            headers={"Authorization": "Bearer test-key"},
+        ) as client:
+            payload = CheckRequest(
+                snippets=[
+                    Snippet(id="light", code="import Mathlib\n#check Nat"),
+                    Snippet(id="heavy", code="import Mathlib\nimport Aesop\n#check Nat"),
+                ],
+                timeout=30,
+            ).model_dump()
+            submit = await client.post("/async/check", json=payload)
+            assert submit.status_code == 200
+
+            jobs = app.state.async_jobs
+            light_task = await jobs.dequeue_task(timeout_sec=1, queue_tier="light")
+            heavy_task = await jobs.dequeue_task(timeout_sec=1, queue_tier="heavy")
+            assert light_task is not None and heavy_task is not None
+
+            metrics = await client.get("/async/metrics")
+            assert metrics.status_code == 200
+            data = metrics.json()
+            assert set(data["tiers"]) == {"light", "heavy"}
+            assert data["tiers"]["light"]["queue_depth"] == 0
+            assert data["tiers"]["heavy"]["queue_depth"] == 0

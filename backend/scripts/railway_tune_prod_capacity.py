@@ -257,8 +257,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--async-metrics-enabled", default="true")
     parser.add_argument("--async-admission-queue-limit", type=int, default=0)
     parser.add_argument("--async-alert-max-oldest-queued-age-sec", type=int, default=60)
-    parser.add_argument("--async-queue-name", default="lean_async_check")
+    parser.add_argument("--async-queue-name-light", default="lean_async_light")
+    parser.add_argument("--async-queue-name-heavy", default="lean_async_heavy")
     parser.add_argument("--worker-async-concurrency", type=int, default=3)
+    parser.add_argument("--worker-queue-tier", default="light")
     parser.add_argument(
         "--api-init-repls",
         default="{}",
@@ -344,7 +346,8 @@ def main() -> int:
             args.async_alert_max_oldest_queued_age_sec
         ),
         "LEAN_SERVER_REDIS_URL": redis_url,
-        "LEAN_SERVER_ASYNC_QUEUE_NAME": args.async_queue_name,
+        "LEAN_SERVER_ASYNC_QUEUE_NAME_LIGHT": args.async_queue_name_light,
+        "LEAN_SERVER_ASYNC_QUEUE_NAME_HEAVY": args.async_queue_name_heavy,
         "LEAN_SERVER_MIN_HOST_FREE_MEM": args.min_host_free_mem,
     }
     api_update = {
@@ -359,6 +362,7 @@ def main() -> int:
         "LEAN_SERVER_MAX_REPL_MEM": args.worker_max_repl_mem,
         "LEAN_SERVER_INIT_REPLS": args.worker_init_repls,
         "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY": str(args.worker_async_concurrency),
+        "LEAN_SERVER_ASYNC_WORKER_QUEUE_TIER": args.worker_queue_tier,
     }
 
     planned = {

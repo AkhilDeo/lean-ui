@@ -24,17 +24,22 @@ class Manager:
         max_repl_mem: int = settings.max_repl_mem,
         init_repls: dict[str, int] = settings.init_repls,
         min_host_free_mem: int = settings.min_host_free_mem,
+        startup_concurrency_limit: int | None = settings.async_startup_concurrency_limit,
     ) -> None:
         self.max_repls = max_repls
         self.max_repl_uses = max_repl_uses
         self.max_repl_mem = max_repl_mem
         self.init_repls = init_repls
         self.min_host_free_mem = min_host_free_mem
+        self.startup_concurrency_limit = startup_concurrency_limit
 
         self._lock: asyncio.Lock | None = None
         self._cond: asyncio.Condition | None = None
+        self._startup_semaphore: asyncio.Semaphore | None = None
         self._free: list[Repl] = []
         self._busy: set[Repl] = set()
+        self._cold_start_count = 0
+        self._spawn_failure_count = 0
 
         logger.info(
             "REPL manager initialized with: MAX_REPLS={}, MAX_REPL_USES={}, MAX_REPL_MEM={} MB, MIN_HOST_FREE_MEM={} MB",
@@ -62,6 +67,8 @@ class Manager:
         if self._lock is None:
             self._lock = asyncio.Lock()
             self._cond = asyncio.Condition(self._lock)
+        if self._startup_semaphore is None and self.startup_concurrency_limit:
+            self._startup_semaphore = asyncio.Semaphore(self.startup_concurrency_limit)
 
     async def initialize_repls(self) -> None:
         if len(self.init_repls) == 0:
@@ -233,8 +240,16 @@ class Manager:
             return None
 
         try:
-            await repl.start()
+            self._ensure_lock()
+            if self._startup_semaphore is not None:
+                async with self._startup_semaphore:
+                    self._cold_start_count += 1
+                    await repl.start()
+            else:
+                self._cold_start_count += 1
+                await repl.start()
         except Exception as e:
+            self._spawn_failure_count += 1
             logger.exception("Failed to start REPL: {}", e)
             raise ReplError(f"Failed to start REPL: {e}") from e
 
@@ -263,3 +278,59 @@ class Manager:
 
             return cmd_response
         return repl.header_cmd_response
+
+    async def count_free_started_repls(self, headers: set[str] | None = None) -> int:
+        self._ensure_lock()
+        assert self._cond is not None
+        async with self._cond:
+            return sum(
+                1
+                for repl in self._free
+                if repl.is_running and (headers is None or repl.header in headers)
+            )
+
+    async def ensure_warm_repls(
+        self, targets: dict[str, int], *, timeout: float = 60.0
+    ) -> None:
+        for header, target in targets.items():
+            if target <= 0:
+                continue
+            while True:
+                current = await self.count_free_started_repls({header})
+                if current >= target:
+                    break
+                self._ensure_lock()
+                assert self._cond is not None
+                async with self._cond:
+                    total = len(self._free) + len(self._busy)
+                    if total >= self.max_repls:
+                        break
+                repl = await self.get_repl(
+                    header=header,
+                    snippet_id="warm-pool",
+                    timeout=timeout,
+                    reuse=False,
+                )
+                try:
+                    prep = await self.prep(
+                        repl,
+                        snippet_id="warm-pool",
+                        timeout=timeout,
+                        debug=False,
+                    )
+                    if prep and prep.error:
+                        await self.destroy_repl(repl)
+                        break
+                except Exception:
+                    await self.destroy_repl(repl)
+                    break
+                await self.release_repl(repl)
+
+    def drain_startup_stats(self) -> dict[str, int]:
+        snapshot = {
+            "cold_starts": self._cold_start_count,
+            "spawn_failures": self._spawn_failure_count,
+        }
+        self._cold_start_count = 0
+        self._spawn_failure_count = 0
+        return snapshot

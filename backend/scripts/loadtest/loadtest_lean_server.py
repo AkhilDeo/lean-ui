@@ -1451,7 +1451,7 @@ def render_incident_report(summary: dict[str, Any]) -> str:
     lines.append("## Notes")
     lines.append("- Async is primary baseline in this suite; sync is validated for near-term readiness.")
     lines.append("- Queue-stall signal uses global progress windows from `/api/async/metrics` plus aggregate poll progress.")
-    lines.append("- Railway env parity to verify separately: `LEAN_SERVER_REDIS_URL`, `LEAN_SERVER_ASYNC_QUEUE_NAME`, `LEAN_SERVER_ASYNC_ENABLED=true`.")
+    lines.append("- Railway env parity to verify separately: `LEAN_SERVER_REDIS_URL`, `LEAN_SERVER_ASYNC_QUEUE_NAME_LIGHT`, `LEAN_SERVER_ASYNC_QUEUE_NAME_HEAVY`, `LEAN_SERVER_ASYNC_ENABLED=true`.")
     lines.append("")
 
     return "\n".join(lines) + "\n"

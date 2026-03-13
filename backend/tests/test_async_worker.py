@@ -7,15 +7,18 @@ from fastapi import HTTPException
 from kimina_client import CheckRequest, ReplResponse, Snippet
 
 from server.async_jobs import InMemoryAsyncJobs
+from server.async_tiering import AsyncQueueTier
 from server.settings import Settings
-from server.worker import process_task, run_worker
+from server.worker import AsyncWorkerPolicy, process_task, run_worker
 
 
 @pytest.mark.asyncio
 async def test_worker_process_task_success(monkeypatch: pytest.MonkeyPatch) -> None:
     jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
     submit = await jobs.submit(
-        CheckRequest(snippets=[Snippet(id="s1", code="#check Nat")], timeout=30)
+        CheckRequest(
+            snippets=[Snippet(id="s1", code="import Mathlib\n#check Nat")], timeout=30
+        )
     )
 
     async def fake_run_checks(*args, **kwargs):  # type: ignore[no-untyped-def]
@@ -23,7 +26,12 @@ async def test_worker_process_task_success(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr("server.worker.run_checks", fake_run_checks)
 
-    did_work = await process_task(jobs=jobs, manager=object(), task_timeout_sec=1)
+    did_work = await process_task(
+        jobs=jobs,
+        manager=object(),
+        task_timeout_sec=1,
+        policy=AsyncWorkerPolicy.from_settings(Settings(_env_file=None)),
+    )
     assert did_work is True
 
     poll = await jobs.poll(submit.job_id)
@@ -31,15 +39,16 @@ async def test_worker_process_task_success(monkeypatch: pytest.MonkeyPatch) -> N
     assert poll.progress.done == 1
     assert poll.results is not None
     assert poll.results[0].id == "s1"
-    assert poll.results[0].status.value == "valid"
-    assert poll.results[0].passed is True
+    assert poll.results[0].analyze().status.value == "valid"
 
 
 @pytest.mark.asyncio
 async def test_worker_process_task_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
     submit = await jobs.submit(
-        CheckRequest(snippets=[Snippet(id="s1", code="#check Nat")], timeout=30)
+        CheckRequest(
+            snippets=[Snippet(id="s1", code="import Mathlib\n#check Nat")], timeout=30
+        )
     )
 
     calls = {"n": 0}
@@ -50,18 +59,24 @@ async def test_worker_process_task_http_error(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr("server.worker.run_checks", fake_run_checks)
 
-    did_work = await process_task(jobs=jobs, manager=object(), task_timeout_sec=1)
+    did_work = await process_task(
+        jobs=jobs,
+        manager=object(),
+        task_timeout_sec=1,
+        policy=AsyncWorkerPolicy.from_settings(Settings(_env_file=None)),
+    )
     assert did_work is True
 
     poll = await jobs.poll(submit.job_id)
     assert poll is not None
     assert poll.progress.failed == 1
     assert poll.results is not None
-    assert poll.results[0].status.value == "server_error"
-    assert poll.results[0].passed is False
+    assert poll.results[0].analyze().status.value == "server_error"
     assert poll.results[0].error is not None
     assert "No available REPLs" in poll.results[0].error
-    assert calls["n"] == 3
+    assert calls["n"] == 5
+    assert jobs._results[submit.job_id][0]["failure_reason"] == "no_available_repls"
+    assert jobs._results[submit.job_id][0]["retry_count"] == 5
 
 
 @pytest.mark.asyncio
@@ -70,7 +85,9 @@ async def test_worker_retries_transient_http_then_succeeds(
 ) -> None:
     jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
     submit = await jobs.submit(
-        CheckRequest(snippets=[Snippet(id="s1", code="#check Nat")], timeout=30)
+        CheckRequest(
+            snippets=[Snippet(id="s1", code="import Mathlib\n#check Nat")], timeout=30
+        )
     )
 
     calls = {"n": 0}
@@ -83,7 +100,12 @@ async def test_worker_retries_transient_http_then_succeeds(
 
     monkeypatch.setattr("server.worker.run_checks", fake_run_checks)
 
-    did_work = await process_task(jobs=jobs, manager=object(), task_timeout_sec=1)
+    did_work = await process_task(
+        jobs=jobs,
+        manager=object(),
+        task_timeout_sec=1,
+        policy=AsyncWorkerPolicy.from_settings(Settings(_env_file=None)),
+    )
     assert did_work is True
 
     poll = await jobs.poll(submit.job_id)
@@ -92,9 +114,10 @@ async def test_worker_retries_transient_http_then_succeeds(
     assert poll.progress.failed == 0
     assert poll.results is not None
     assert poll.results[0].id == "s1"
-    assert poll.results[0].status.value == "valid"
-    assert poll.results[0].passed is True
+    assert poll.results[0].analyze().status.value == "valid"
     assert calls["n"] == 2
+    assert jobs._results[submit.job_id][0]["retry_count"] == 1
+    assert jobs._results[submit.job_id][0]["failure_reason"] is None
 
 
 @pytest.mark.asyncio
@@ -108,12 +131,27 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
         async def close(self) -> None:
             return None
 
+        async def record_worker_metrics(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            _ = kwargs
+            return None
+
     class FakeManager:
         def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
             _ = kwargs
 
         async def cleanup(self) -> None:
             return None
+
+        async def ensure_warm_repls(self, targets, timeout: float = 60.0) -> None:  # type: ignore[no-untyped-def]
+            _ = targets, timeout
+            return None
+
+        async def count_free_started_repls(self, headers=None) -> int:  # type: ignore[no-untyped-def]
+            _ = headers
+            return 0
+
+        def drain_startup_stats(self) -> dict[str, int]:
+            return {"cold_starts": 0, "spawn_failures": 0}
 
     async def fake_create_async_jobs(cfg):  # type: ignore[no-untyped-def]
         _ = cfg
@@ -126,8 +164,11 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
         manager,
         task_timeout_sec: int,
         worker_retries: int,
+        policy,
+        circuit_breaker,
+        warm_targets,
     ) -> None:
-        _ = jobs, manager, task_timeout_sec, worker_retries
+        _ = jobs, manager, task_timeout_sec, worker_retries, policy, circuit_breaker, warm_targets
         started.add(consumer_id)
         try:
             await asyncio.Event().wait()
@@ -142,6 +183,7 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
     settings.async_enabled = True
     settings.max_repls = 4
     settings.async_worker_concurrency = 3
+    settings.async_worker_queue_tier = AsyncQueueTier.all.value
 
     task = asyncio.create_task(run_worker(settings))
     await asyncio.sleep(0.05)
@@ -166,9 +208,24 @@ async def test_run_worker_uses_configured_concurrency(
         async def close(self) -> None:
             return None
 
+        async def record_worker_metrics(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            _ = kwargs
+            return None
+
     class DummyManager:
         async def cleanup(self) -> None:
             return None
+
+        async def ensure_warm_repls(self, targets, timeout: float = 60.0) -> None:  # type: ignore[no-untyped-def]
+            _ = targets, timeout
+            return None
+
+        async def count_free_started_repls(self, headers=None) -> int:  # type: ignore[no-untyped-def]
+            _ = headers
+            return 0
+
+        def drain_startup_stats(self) -> dict[str, int]:
+            return {"cold_starts": 0, "spawn_failures": 0}
 
     async def fake_create_async_jobs(_cfg: Settings) -> DummyJobs:
         return DummyJobs()
@@ -191,6 +248,7 @@ async def test_run_worker_uses_configured_concurrency(
     cfg.async_enabled = True
     cfg.max_repls = 5
     cfg.async_worker_concurrency = 3
+    cfg.async_worker_queue_tier = AsyncQueueTier.all.value
 
     task = asyncio.create_task(run_worker(cfg))
     await asyncio.wait_for(reached_target.wait(), timeout=1.0)
@@ -199,3 +257,49 @@ async def test_run_worker_uses_configured_concurrency(
         await task
 
     assert max_inflight >= 3
+
+
+@pytest.mark.asyncio
+async def test_worker_retries_transient_exception_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
+    submit = await jobs.submit(
+        CheckRequest(
+            snippets=[
+                Snippet(
+                    id="s1",
+                    code="import Mathlib\nimport Aesop\n#check Nat",
+                )
+            ],
+            timeout=30,
+        )
+    )
+
+    calls = {"n": 0}
+
+    async def fake_run_checks(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("REPL returned empty stdout (stderr=std::bad_alloc)")
+        return [ReplResponse(id="s1", time=0.1, response={"env": 0})]
+
+    monkeypatch.setattr("server.worker.run_checks", fake_run_checks)
+
+    settings = Settings(_env_file=None)
+    settings.async_worker_queue_tier = AsyncQueueTier.heavy.value
+    did_work = await process_task(
+        jobs=jobs,
+        manager=object(),
+        task_timeout_sec=1,
+        policy=AsyncWorkerPolicy.from_settings(settings),
+    )
+    assert did_work is True
+
+    poll = await jobs.poll(submit.job_id)
+    assert poll is not None
+    assert poll.progress.done == 1
+    assert poll.results is not None
+    assert poll.results[0].analyze().status.value == "valid"
+    assert calls["n"] == 3
+    assert jobs._results[submit.job_id][0]["retry_count"] == 2

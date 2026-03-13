@@ -151,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Validate async Redis path used by Lean UI worker/API."
     )
     parser.add_argument("--redis-url", default="")
-    parser.add_argument("--queue-name", default="lean_async_check")
+    parser.add_argument("--queue-name", default="lean_async_light")
     parser.add_argument("--key-prefix", default="lean_async")
     parser.add_argument("--timeout-sec", type=int, default=5)
     parser.add_argument("--output-json", default="")

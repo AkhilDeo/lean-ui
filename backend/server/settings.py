@@ -1,6 +1,7 @@
 import os
 import re
 from enum import Enum
+import json
 from pathlib import Path
 from typing import cast
 
@@ -42,7 +43,8 @@ class Settings(BaseSettings):
     # Async queue API / worker
     async_enabled: bool = False
     redis_url: str | None = None
-    async_queue_name: str = "lean_async_check"
+    async_queue_name_light: str = "lean_async_light"
+    async_queue_name_heavy: str = "lean_async_heavy"
     async_result_ttl_sec: int = 86400
     async_backlog_limit: int = 50000
     async_max_queue_wait_sec: int = 600
@@ -50,9 +52,25 @@ class Settings(BaseSettings):
     async_use_in_memory_backend: bool = False
     async_metrics_enabled: bool = True
     async_worker_concurrency: int | None = None
+    async_worker_queue_tier: str = "all"
     async_worker_retries: int = 3
     async_admission_queue_limit: int = 0
     async_alert_max_oldest_queued_age_sec: int = 60
+    async_light_retry_attempts: int = 5
+    async_heavy_retry_attempts: int = 7
+    async_retry_backoff_initial_ms: int = 250
+    async_retry_backoff_max_ms: int = 5000
+    async_heavy_body_bytes: int = 8 * 1024
+    async_heavy_line_count: int = 250
+    async_startup_concurrency_limit: int | None = None
+    async_circuit_breaker_window: int = 50
+    async_circuit_breaker_pause_sec: int = 15
+    async_circuit_breaker_failure_rate: float = 0.10
+    async_light_warm_repls: dict[str, int] = {"import Mathlib": 4}
+    async_heavy_warm_repls: dict[str, int] = {
+        "import Mathlib": 1,
+        "import Mathlib\nimport Aesop": 1,
+    }
 
     # Request policy hardening
     request_timeout_max_sec: int = 60
@@ -129,6 +147,79 @@ class Settings(BaseSettings):
         if v < 0:
             raise ValueError("request_timeout_max_sec must be >= 0")
         return v
+
+    @field_validator(
+        "async_light_retry_attempts",
+        "async_heavy_retry_attempts",
+        "async_retry_backoff_initial_ms",
+        "async_retry_backoff_max_ms",
+        "async_heavy_body_bytes",
+        "async_heavy_line_count",
+        "async_circuit_breaker_window",
+        "async_circuit_breaker_pause_sec",
+    )
+    @classmethod
+    def _validate_positive_async_ints(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("async verifier tuning integers must be >= 1")
+        return v
+
+    @field_validator("async_circuit_breaker_failure_rate")
+    @classmethod
+    def _validate_failure_rate(cls, v: float) -> float:
+        if v <= 0 or v > 1:
+            raise ValueError("async_circuit_breaker_failure_rate must be in (0, 1]")
+        return v
+
+    @field_validator("async_worker_queue_tier")
+    @classmethod
+    def _validate_worker_queue_tier(cls, v: str) -> str:
+        normalized = v.strip().lower()
+        if normalized not in {"all", "light", "heavy"}:
+            raise ValueError("async_worker_queue_tier must be one of: all, light, heavy")
+        return normalized
+
+    @field_validator("async_startup_concurrency_limit", mode="before")
+    @classmethod
+    def _parse_async_startup_concurrency_limit(
+        cls, v: int | str | None
+    ) -> int | None:
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        parsed = int(v)
+        if parsed < 1:
+            raise ValueError("async_startup_concurrency_limit must be >= 1 when provided")
+        return parsed
+
+    @field_validator("async_light_warm_repls", "async_heavy_warm_repls", mode="before")
+    @classmethod
+    def _parse_warm_repls(cls, v: dict[str, int] | str) -> dict[str, int]:
+        if isinstance(v, dict):
+            parsed = v
+        elif isinstance(v, str):
+            if not v.strip():
+                return {}
+            try:
+                raw = json.loads(v)
+            except json.JSONDecodeError as exc:
+                raise ValueError("warm REPL settings must be valid JSON objects") from exc
+            if not isinstance(raw, dict):
+                raise ValueError("warm REPL settings must be JSON objects")
+            parsed = raw
+        else:
+            raise ValueError("warm REPL settings must be dicts or JSON object strings")
+
+        normalized: dict[str, int] = {}
+        for key, value in parsed.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError("warm REPL headers must be non-empty strings")
+            count = int(value)
+            if count < 0:
+                raise ValueError("warm REPL counts must be >= 0")
+            normalized[key] = count
+        return normalized
 
 
 settings = Settings()
