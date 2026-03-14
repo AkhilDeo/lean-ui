@@ -72,6 +72,16 @@ class Settings(BaseSettings):
         "import Mathlib\nimport Aesop": 2,
     }
 
+    # Railway worker autoscaler
+    autoscale_enabled: bool = False
+    autoscale_railway_token: str | None = None
+    autoscale_worker_service_id: str = "80159ca4-ee4e-4023-92c8-bbaf89c5ea04"
+    autoscale_min_replicas: int = 1
+    autoscale_max_replicas: int = 12
+    autoscale_cooldown_sec: int = 600
+    autoscale_throttle_sec: int = 60
+    autoscale_check_interval_sec: int = 30
+
     # Request policy hardening
     request_timeout_max_sec: int = 60
     allow_client_debug: bool = False
@@ -170,6 +180,13 @@ class Settings(BaseSettings):
         if v <= 0 or v > 1:
             raise ValueError("async_circuit_breaker_failure_rate must be in (0, 1]")
         return v
+
+    @field_validator("autoscale_railway_token", mode="before")
+    @classmethod
+    def _resolve_railway_token(cls, v: str | None) -> str | None:
+        if v:
+            return v
+        return os.getenv("RAILWAY_TOKEN") or os.getenv("RAILWAY_API_TOKEN") or None
 
     @field_validator("async_worker_queue_tier")
     @classmethod

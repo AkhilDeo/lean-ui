@@ -84,6 +84,9 @@ async def submit_async_check(
     )
     try:
         response = await jobs.submit(normalized_payload)
+        autoscaler = getattr(request.app.state, "autoscaler", None)
+        if autoscaler is not None:
+            await autoscaler.notify_submit()
         logger.bind(
             endpoint="api.async.submit",
             job_id=response.job_id,

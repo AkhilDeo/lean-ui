@@ -17,6 +17,7 @@ from .routers.async_check import router as async_check_router
 from .routers.backward import router as backward_router
 from .routers.check import router as check_router
 from .routers.health import router as health_router
+from .autoscaler import WorkerAutoscaler
 from .settings import Environment, Settings
 
 
@@ -72,6 +73,16 @@ def create_app(settings: Settings) -> FastAPI:
                 settings.async_metrics_enabled,
             )
 
+        if settings.autoscale_enabled and hasattr(app.state, "async_jobs"):
+            try:
+                autoscaler = WorkerAutoscaler(settings, app.state.async_jobs)
+                await autoscaler.start()
+                app.state.autoscaler = autoscaler
+            except Exception:
+                logger.opt(exception=True).warning(
+                    "Failed to start worker autoscaler; continuing without it"
+                )
+
         async def _init_repls_background() -> None:
             try:
                 logger.info("Starting background REPL initialization...")
@@ -100,6 +111,10 @@ def create_app(settings: Settings) -> FastAPI:
             ).start()
 
         yield
+
+        autoscaler = getattr(app.state, "autoscaler", None)
+        if autoscaler is not None:
+            await autoscaler.stop()
 
         async_jobs = getattr(app.state, "async_jobs", None)
         if async_jobs is not None:
