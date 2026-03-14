@@ -63,13 +63,13 @@ class Settings(BaseSettings):
     async_heavy_body_bytes: int = 8 * 1024
     async_heavy_line_count: int = 250
     async_startup_concurrency_limit: int | None = None
-    async_circuit_breaker_window: int = 50
-    async_circuit_breaker_pause_sec: int = 15
+    async_circuit_breaker_window: int = 10
+    async_circuit_breaker_pause_sec: int = 30
     async_circuit_breaker_failure_rate: float = 0.10
-    async_light_warm_repls: dict[str, int] = {"import Mathlib": 4}
+    async_light_warm_repls: dict[str, int] = {"import Mathlib": 5}
     async_heavy_warm_repls: dict[str, int] = {
-        "import Mathlib": 1,
-        "import Mathlib\nimport Aesop": 1,
+        "import Mathlib": 2,
+        "import Mathlib\nimport Aesop": 2,
     }
 
     # Request policy hardening

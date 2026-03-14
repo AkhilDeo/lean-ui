@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
+from collections import namedtuple
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
 from server.errors import NoAvailableReplError
 from server.manager import Manager
+from server.repl import Repl
 
 
 @pytest.mark.asyncio
@@ -112,3 +118,44 @@ async def test_ensure_warm_repls_refills_missing_headers(
 
     assert created == ["import Mathlib", "import Mathlib"]
     assert await manager.count_free_started_repls({"import Mathlib"}) == 2
+
+
+@pytest.mark.asyncio
+async def test_mem_monitor_kills_repl_when_rss_exceeds_limit() -> None:
+    """RSS enforcement kills the REPL process group when memory exceeds limit."""
+    from datetime import datetime
+
+    repl = Repl(
+        uuid=uuid4(),
+        created_at=datetime.now(),
+        header="",
+        max_repl_mem=100,  # 100 MB
+        max_repl_uses=-1,
+    )
+
+    MemInfo = namedtuple("MemInfo", ["rss"])
+    fake_proc = MagicMock()
+    fake_proc.pid = 12345
+    fake_proc.returncode = None
+    repl.proc = fake_proc
+
+    fake_ps = MagicMock()
+    # Return RSS of 200 MB (exceeds 100 MB limit)
+    fake_ps.memory_info.return_value = MemInfo(rss=200 * 1024 * 1024)
+    fake_ps.children.return_value = []
+    repl._ps_proc = fake_ps
+
+    with patch("server.repl.os.killpg") as mock_killpg, \
+         patch("server.repl.os.getpgid", return_value=12345):
+        # Run one iteration of the monitor
+        await asyncio.sleep(0)  # ensure event loop is available
+        # Directly call the monitor; it will sleep 1s then check
+        monitor_task = asyncio.create_task(repl._mem_monitor())
+        await asyncio.sleep(1.2)
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
+
+        mock_killpg.assert_called_once_with(12345, signal.SIGKILL)

@@ -207,6 +207,27 @@ async def process_task(
                 failure_reason = _normalize_failure_reason(str(e.detail))
                 is_retryable = _is_retryable_http_exception(e) and failure_reason is not None
                 if is_retryable and attempt < attempts:
+                    # Spawn failures are systemic; stop retrying early
+                    if failure_reason in SPAWN_FAILURE_REASONS and attempt >= 2:
+                        logger.warning(
+                            "Worker spawn failure early exit: consumer_id={} task_id={} failure_reason={} attempt={}",
+                            consumer_id,
+                            task.task_id,
+                            failure_reason,
+                            attempt,
+                        )
+                        task.failure_reason = failure_reason
+                        task.retry_count = attempt
+                        await jobs.record_worker_metrics(
+                            queue_tier=queue_tier,
+                            exhausted_retries=1,
+                            failure_reason=failure_reason,
+                        )
+                        if circuit_breaker is not None:
+                            await circuit_breaker.note_attempt(True)
+                        await jobs.mark_task_failure(task, str(e.detail), task.snippet.id)
+                        return True
+
                     task.failure_reason = failure_reason
                     task.retry_count = attempt
                     await jobs.record_worker_metrics(
@@ -216,11 +237,14 @@ async def process_task(
                     )
                     if circuit_breaker is not None:
                         await circuit_breaker.note_attempt(True)
-                    backoff = min(
-                        effective_policy.retry_backoff_initial_ms * (2 ** (attempt - 1)),
-                        effective_policy.retry_backoff_max_ms,
-                    )
-                    jitter = random.uniform(0.0, backoff / 1000.0)
+                    if failure_reason in SPAWN_FAILURE_REASONS:
+                        cooldown = 5.0
+                    else:
+                        backoff = min(
+                            effective_policy.retry_backoff_initial_ms * (2 ** (attempt - 1)),
+                            effective_policy.retry_backoff_max_ms,
+                        )
+                        cooldown = random.uniform(0.0, backoff / 1000.0)
                     logger.warning(
                         "Worker transient HTTPException, retrying: consumer_id={} job_id={} task_id={} index={} snippet_id={} attempt={}/{} status_code={} detail={} failure_reason={} backoff_sec={:.3f}",
                         consumer_id,
@@ -233,9 +257,9 @@ async def process_task(
                         e.status_code,
                         e.detail,
                         failure_reason,
-                        jitter,
+                        cooldown,
                     )
-                    await asyncio.sleep(jitter)
+                    await asyncio.sleep(cooldown)
                     continue
 
                 task.failure_reason = failure_reason
@@ -266,6 +290,27 @@ async def process_task(
                 detail = f"worker_error: {e}"
                 failure_reason = _normalize_failure_reason(detail)
                 if failure_reason is not None and attempt < attempts:
+                    # Spawn failures are systemic; stop retrying early
+                    if failure_reason in SPAWN_FAILURE_REASONS and attempt >= 2:
+                        logger.warning(
+                            "Worker spawn failure early exit: consumer_id={} task_id={} failure_reason={} attempt={}",
+                            consumer_id,
+                            task.task_id,
+                            failure_reason,
+                            attempt,
+                        )
+                        task.failure_reason = failure_reason
+                        task.retry_count = attempt
+                        await jobs.record_worker_metrics(
+                            queue_tier=queue_tier,
+                            exhausted_retries=1,
+                            failure_reason=failure_reason,
+                        )
+                        if circuit_breaker is not None:
+                            await circuit_breaker.note_attempt(True)
+                        await jobs.mark_task_failure(task, detail, task.snippet.id)
+                        return True
+
                     task.failure_reason = failure_reason
                     task.retry_count = attempt
                     await jobs.record_worker_metrics(
@@ -275,11 +320,14 @@ async def process_task(
                     )
                     if circuit_breaker is not None:
                         await circuit_breaker.note_attempt(True)
-                    backoff = min(
-                        effective_policy.retry_backoff_initial_ms * (2 ** (attempt - 1)),
-                        effective_policy.retry_backoff_max_ms,
-                    )
-                    jitter = random.uniform(0.0, backoff / 1000.0)
+                    if failure_reason in SPAWN_FAILURE_REASONS:
+                        cooldown = 5.0
+                    else:
+                        backoff = min(
+                            effective_policy.retry_backoff_initial_ms * (2 ** (attempt - 1)),
+                            effective_policy.retry_backoff_max_ms,
+                        )
+                        cooldown = random.uniform(0.0, backoff / 1000.0)
                     logger.warning(
                         "Worker transient exception, retrying: consumer_id={} task_id={} attempt={}/{} failure_reason={} error={} backoff_sec={:.3f}",
                         consumer_id,
@@ -288,9 +336,9 @@ async def process_task(
                         attempts,
                         failure_reason,
                         e,
-                        jitter,
+                        cooldown,
                     )
-                    await asyncio.sleep(jitter)
+                    await asyncio.sleep(cooldown)
                     continue
 
                 logger.exception(

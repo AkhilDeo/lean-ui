@@ -250,8 +250,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--api-max-repls", type=int, default=1)
     parser.add_argument("--api-max-repl-mem", default="8G")
-    parser.add_argument("--worker-max-repls", type=int, default=3)
-    parser.add_argument("--worker-max-repl-mem", default="8G")
+    parser.add_argument("--worker-max-repls", type=int, default=6)
+    parser.add_argument("--worker-max-repl-mem", default="12G")
     parser.add_argument("--min-host-free-mem", default="4G")
     parser.add_argument("--async-enabled", default="true")
     parser.add_argument("--async-metrics-enabled", default="true")
@@ -259,7 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--async-alert-max-oldest-queued-age-sec", type=int, default=60)
     parser.add_argument("--async-queue-name-light", default="lean_async_light")
     parser.add_argument("--async-queue-name-heavy", default="lean_async_heavy")
-    parser.add_argument("--worker-async-concurrency", type=int, default=3)
+    parser.add_argument("--worker-async-concurrency", type=int, default=6)
     parser.add_argument("--worker-queue-tier", default="light")
     parser.add_argument(
         "--api-init-repls",
@@ -269,13 +269,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--worker-init-repls",
         default='{"import Mathlib":1,"import Mathlib\\nimport Aesop":1}',
     )
+    parser.add_argument("--async-startup-concurrency-limit", type=int, default=2)
     parser.add_argument("--redis-url", default="")
 
     parser.add_argument("--api-vcpus", type=float, default=4.0)
     parser.add_argument("--api-memory-gb", type=float, default=8.0)
     parser.add_argument("--worker-vcpus", type=float, default=8.0)
     parser.add_argument("--worker-memory-gb", type=float, default=32.0)
-    parser.add_argument("--worker-replicas", type=int, default=6)
+    parser.add_argument("--worker-replicas", type=int, default=12)
 
     parser.add_argument(
         "--output-dir",
@@ -363,6 +364,7 @@ def main() -> int:
         "LEAN_SERVER_INIT_REPLS": args.worker_init_repls,
         "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY": str(args.worker_async_concurrency),
         "LEAN_SERVER_ASYNC_WORKER_QUEUE_TIER": args.worker_queue_tier,
+        "LEAN_SERVER_ASYNC_STARTUP_CONCURRENCY_LIMIT": str(args.async_startup_concurrency_limit),
     }
 
     planned = {

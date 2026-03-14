@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import platform
 import signal
 from asyncio.subprocess import Process
 from datetime import datetime
@@ -132,18 +131,6 @@ class Repl:
         self._stderr_chunks.clear()
 
         def _preexec() -> None:
-            import resource
-
-            # Memory limit
-            if platform.system() != "Darwin":  # Only for Linux
-                resource.setrlimit(
-                    resource.RLIMIT_AS, (self.max_memory_bytes, self.max_memory_bytes)
-                )
-
-            # No CPU limit on REPL, most Lean proofs take up to one core.
-            # The adjustment variables are the maximum number of REPLs and the timeout.
-            # See https://github.com/leanprover-community/repl/issues/91
-
             os.setsid()
 
         self.proc = await asyncio.create_subprocess_exec(
@@ -214,23 +201,38 @@ class Repl:
     async def _cpu_monitor(self) -> None:
         while self.is_running and self._ps_proc and self._loop:
             await asyncio.sleep(1)
-            now = self._loop.time()
+            try:
+                now = self._loop.time()
 
-            cur_cpu = self._sum_cpu_times(self._ps_proc)
-            delta_cpu = cur_cpu - self._last_cpu_time
-            delta_t = now - self._last_check
-            usage_pct = (delta_cpu / delta_t) * 100
-            self._cpu_max = max(self._cpu_max, usage_pct)
-            self._last_cpu_time = cur_cpu
-            self._last_check = now
+                cur_cpu = self._sum_cpu_times(self._ps_proc)
+                delta_cpu = cur_cpu - self._last_cpu_time
+                delta_t = now - self._last_check
+                usage_pct = (delta_cpu / delta_t) * 100
+                self._cpu_max = max(self._cpu_max, usage_pct)
+                self._last_cpu_time = cur_cpu
+                self._last_check = now
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                break
 
     async def _mem_monitor(self) -> None:
         while self.is_running and self._ps_proc:
             await asyncio.sleep(1)
-            total = self._ps_proc.memory_info().rss
-            for child in self._ps_proc.children(recursive=True):
-                total += child.memory_info().rss
-            self._mem_max = max(self._mem_max, total)
+            try:
+                total = self._ps_proc.memory_info().rss
+                for child in self._ps_proc.children(recursive=True):
+                    total += child.memory_info().rss
+                self._mem_max = max(self._mem_max, total)
+                if total > self.max_memory_bytes:
+                    logger.warning(
+                        "\\[{}] RSS {} exceeds limit {}, killing REPL",
+                        self.uuid.hex[:8],
+                        total,
+                        self.max_memory_bytes,
+                    )
+                    os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+                    break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                break
 
     @property
     def is_running(self) -> bool:

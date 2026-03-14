@@ -281,7 +281,7 @@ async def test_worker_retries_transient_exception_then_succeeds(
     async def fake_run_checks(*args, **kwargs):  # type: ignore[no-untyped-def]
         calls["n"] += 1
         if calls["n"] < 3:
-            raise RuntimeError("REPL returned empty stdout (stderr=std::bad_alloc)")
+            raise RuntimeError("REPL returned empty stdout")
         return [ReplResponse(id="s1", time=0.1, response={"env": 0})]
 
     monkeypatch.setattr("server.worker.run_checks", fake_run_checks)
@@ -303,3 +303,45 @@ async def test_worker_retries_transient_exception_then_succeeds(
     assert poll.results[0].analyze().status.value == "valid"
     assert calls["n"] == 3
     assert jobs._results[submit.job_id][0]["retry_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_worker_spawn_failure_stops_retrying_after_two_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spawn failures (resource_unavailable) should early-exit after attempt 2."""
+    jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
+    submit = await jobs.submit(
+        CheckRequest(
+            snippets=[Snippet(id="s1", code="import Mathlib\n#check Nat")], timeout=30
+        )
+    )
+
+    calls = {"n": 0}
+
+    async def fake_run_checks(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to start REPL: [Errno 11] Resource temporarily unavailable",
+        )
+
+    monkeypatch.setattr("server.worker.run_checks", fake_run_checks)
+
+    did_work = await process_task(
+        jobs=jobs,
+        manager=object(),
+        task_timeout_sec=1,
+        policy=AsyncWorkerPolicy.from_settings(Settings(_env_file=None)),
+    )
+    assert did_work is True
+
+    # Should stop after 2 attempts, not exhaust all 5
+    assert calls["n"] == 2
+
+    poll = await jobs.poll(submit.job_id)
+    assert poll is not None
+    assert poll.progress.failed == 1
+    assert poll.results is not None
+    assert poll.results[0].analyze().status.value == "server_error"
+    assert jobs._results[submit.job_id][0]["failure_reason"] == "resource_unavailable"
