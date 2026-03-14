@@ -260,7 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--async-queue-name-light", default="lean_async_light")
     parser.add_argument("--async-queue-name-heavy", default="lean_async_heavy")
     parser.add_argument("--worker-async-concurrency", type=int, default=6)
-    parser.add_argument("--worker-queue-tier", default="light")
+    parser.add_argument("--worker-queue-tier", default="all")
     parser.add_argument(
         "--api-init-repls",
         default="{}",
