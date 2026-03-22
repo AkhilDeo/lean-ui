@@ -1,7 +1,13 @@
 import re
 import statistics
+import sys
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any
+
+if sys.version_info < (3, 12):
+    from typing_extensions import TypedDict
+else:
+    from typing import TypedDict
 
 from .models import (
     BackwardResponse,

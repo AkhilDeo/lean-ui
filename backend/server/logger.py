@@ -1,12 +1,16 @@
-from google.auth.exceptions import DefaultCredentialsError
-from google.cloud.logging import Client as GCPClient
-from google.cloud.logging.handlers import CloudLoggingHandler
 from loguru import logger
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
 
 from .settings import Environment, settings
+
+try:
+    from google.cloud.logging import Client as GCPClient
+    from google.cloud.logging.handlers import CloudLoggingHandler
+except Exception:  # pragma: no cover - exercised only when GCP logging deps are unavailable
+    GCPClient = None  # type: ignore[assignment]
+    CloudLoggingHandler = None  # type: ignore[assignment]
 
 console = Console()
 LOG_FORMAT = "[job_id={extra[job_id]}] {message}"
@@ -35,14 +39,17 @@ def setup_logging() -> None:
         )
 
         # Then try to add GCP logging as an additional handler
-        try:
-            gcp_client = GCPClient()
-            gcp_handler = CloudLoggingHandler(gcp_client)
-            logger.add(gcp_handler, level="INFO", serialize=True)
-            logger.info("Google Cloud Logging enabled successfully")
-        except Exception as e:
-            # Safe to log warning now since RichHandler is already configured
-            logger.warning(f"Failed to setup Google Cloud Logging: {e}")
+        if GCPClient is None or CloudLoggingHandler is None:
+            logger.warning("Google Cloud Logging dependencies not installed; skipping setup")
+        else:
+            try:
+                gcp_client = GCPClient()
+                gcp_handler = CloudLoggingHandler(gcp_client)
+                logger.add(gcp_handler, level="INFO", serialize=True)
+                logger.info("Google Cloud Logging enabled successfully")
+            except Exception as e:
+                # Safe to log warning now since RichHandler is already configured
+                logger.warning(f"Failed to setup Google Cloud Logging: {e}")
     else:
         logger.add(
             RichHandler(

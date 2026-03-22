@@ -221,9 +221,9 @@ export function LeanVerifier() {
   }
 
   return (
-    <div className="h-screen flex bg-background">
+    <div className="h-screen overflow-hidden flex bg-background">
       {/* History Sidebar */}
-      <div className="w-72 shrink-0">
+      <div className="w-72 shrink-0 min-h-0">
         <HistorySidebar
           history={history}
           selectedId={selectedId}
@@ -235,7 +235,7 @@ export function LeanVerifier() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* Header */}
         <header className="h-16 border-b border-border flex items-center justify-between px-6 bg-card">
           <div className="flex items-center gap-3">
@@ -275,9 +275,9 @@ export function LeanVerifier() {
         </header>
 
         {/* Editor and Results */}
-        <div className="flex-1 flex min-h-0">
+        <div className="flex-1 flex min-h-0 overflow-hidden">
           {/* Code Editor */}
-          <div className="flex-1 flex flex-col min-w-0 p-4">
+          <div className="flex-1 flex flex-col min-w-0 min-h-0 p-4">
             <div className="flex items-center gap-2 mb-3">
               <Sparkles className="h-4 w-4 text-primary" />
               <span className="text-sm font-medium">Lean Code</span>
@@ -298,7 +298,7 @@ export function LeanVerifier() {
           {/* Results Panel */}
           <div
             ref={resizeRef}
-            className="shrink-0 bg-card"
+            className="shrink-0 bg-card min-h-0 flex flex-col"
             style={{ width: `${rightSidebarWidth}px` }}
           >
             <VerificationPanel result={currentResult} isLoading={isVerifying} />

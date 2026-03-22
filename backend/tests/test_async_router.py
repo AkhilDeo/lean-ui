@@ -12,7 +12,7 @@ from server.settings import Environment, Settings
 
 
 def _build_app(
-    backlog_limit: int = 50000,
+    backlog_limit: int = 100000,
     async_metrics_enabled: bool = True,
     admission_queue_limit: int = 0,
 ):

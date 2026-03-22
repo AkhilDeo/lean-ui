@@ -58,7 +58,7 @@ export function HistorySidebar({
   };
 
   return (
-    <div className="h-full flex flex-col bg-card border-r border-border">
+    <div className="h-full min-h-0 flex flex-col bg-card border-r border-border">
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -75,7 +75,7 @@ export function HistorySidebar({
         </Button>
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-1">
           {history.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">

@@ -1,10 +1,18 @@
 import difflib
 import json
+import sys
+from pathlib import Path
 from typing import Any, Literal
 
 import pytest
 from _pytest.fixtures import FixtureRequest
 from fastapi.testclient import TestClient
+
+CLIENT_DIR = Path(__file__).resolve().parents[1] / "client"
+client_path = str(CLIENT_DIR)
+if client_path in sys.path:
+    sys.path.remove(client_path)
+sys.path.insert(0, client_path)
 
 from server.main import create_app
 from server.settings import Environment, Settings

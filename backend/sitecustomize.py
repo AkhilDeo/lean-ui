@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _prefer_vendored_client() -> None:
-    client_dir = Path(__file__).resolve().parents[1] / "client"
+    client_dir = Path(__file__).resolve().parent / "client"
     client_path = str(client_dir)
     if client_path in sys.path:
         sys.path.remove(client_path)

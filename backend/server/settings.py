@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     async_queue_name_light: str = "lean_async_light"
     async_queue_name_heavy: str = "lean_async_heavy"
     async_result_ttl_sec: int = 86400
-    async_backlog_limit: int = 50000
+    async_backlog_limit: int = 100000
     async_max_queue_wait_sec: int = 600
     async_redis_key_prefix: str = "lean_async"
     async_use_in_memory_backend: bool = False
