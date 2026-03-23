@@ -27,7 +27,18 @@ class Settings(BaseSettings):
 
     environment: Environment = Environment.dev
 
-    lean_version: str = "v4.15.0"
+    lean_version: str = "v4.28.0"
+    runtime_id: str = "v4.28.0"
+    default_runtime_id: str = "v4.28.0"
+    gateway_enabled: bool = False
+    embedded_worker_enabled: bool = False
+    gateway_sync_proxy_timeout_sec: int = 3
+    gateway_wake_replicas: int = 1
+    runtime_idle_ttl_sec: int = 15 * 60
+    runtime_service_id: str | None = None
+    runtime_service_name: str = ""
+    railway_environment_id: str | None = None
+    railway_region: str = "us-east4-eqdc4a"
     repl_path: Path = BASE_DIR / "repl/.lake/build/bin/repl"
     project_dir: Path = BASE_DIR / "mathlib4"
 
@@ -167,6 +178,9 @@ class Settings(BaseSettings):
         "async_heavy_line_count",
         "async_circuit_breaker_window",
         "async_circuit_breaker_pause_sec",
+        "gateway_sync_proxy_timeout_sec",
+        "gateway_wake_replicas",
+        "runtime_idle_ttl_sec",
     )
     @classmethod
     def _validate_positive_async_ints(cls, v: int) -> int:

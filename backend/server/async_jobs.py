@@ -22,6 +22,7 @@ from .async_queue import (
     serialize_result,
 )
 from .async_tiering import AsyncQueueTier, classify_async_queue_tier
+from .runtime_registry import build_runtime_registry
 from .settings import Settings
 
 try:
@@ -102,6 +103,7 @@ class AsyncJobs(Protocol):
         self,
         timeout_sec: int = 1,
         queue_tier: str | AsyncQueueTier | None = None,
+        runtime_id: str | None = None,
     ) -> AsyncTaskPayload | None: ...
 
     async def mark_task_started(self, task: AsyncTaskPayload) -> None: ...
@@ -114,7 +116,7 @@ class AsyncJobs(Protocol):
         self, task: AsyncTaskPayload, error: str, snippet_id: str
     ) -> None: ...
 
-    async def metrics(self) -> AsyncQueueMetrics: ...
+    async def metrics(self, runtime_id: str | None = None) -> AsyncQueueMetrics: ...
 
     async def recover_running_tasks(self) -> int: ...
 
@@ -122,6 +124,7 @@ class AsyncJobs(Protocol):
         self,
         *,
         queue_tier: str | AsyncQueueTier,
+        runtime_id: str | None = None,
         warm_repls: int | None = None,
         cold_starts: int = 0,
         spawn_failures: int = 0,
@@ -199,11 +202,20 @@ def _metrics_from_meta_snapshots(metas: list[dict[str, str]]) -> tuple[int, int]
     return inflight_jobs, running_tasks
 
 
+def _queue_name(base_name: str, runtime_id: str) -> str:
+    suffix = runtime_id.lower().replace(".", "_").replace("-", "_")
+    return f"{base_name}:{suffix}"
+
+
+def _known_runtime_ids(settings: Settings) -> list[str]:
+    return build_runtime_registry(settings.default_runtime_id).known_runtime_ids()
+
+
 @dataclass
 class RedisAsyncJobs:
     redis: Redis
-    queues: dict[AsyncQueueTier, RedisTaskQueue]
-    queue_names: dict[AsyncQueueTier, str]
+    base_queue_names: dict[AsyncQueueTier, str]
+    runtime_ids: list[str]
     key_prefix: str
     ttl_sec: int
     backlog_limit: int
@@ -227,53 +239,69 @@ class RedisAsyncJobs:
             return queue_tier
         return AsyncQueueTier(queue_tier)
 
-    def _metrics_key(self, queue_tier: str | AsyncQueueTier) -> str:
+    def _queue_name(self, runtime_id: str, queue_tier: str | AsyncQueueTier) -> str:
         tier = self._normalize_tier(queue_tier)
-        return f"{self.key_prefix}:queue:{self.queue_names[tier]}:metrics"
+        return _queue_name(self.base_queue_names[tier], runtime_id)
 
-    def _failure_reasons_key(self, queue_tier: str | AsyncQueueTier) -> str:
-        tier = self._normalize_tier(queue_tier)
-        return f"{self.key_prefix}:queue:{self.queue_names[tier]}:failure_reasons"
+    def _task_queue(self, runtime_id: str, queue_tier: str | AsyncQueueTier) -> RedisTaskQueue:
+        return RedisTaskQueue(self.redis, self._queue_name(runtime_id, queue_tier))
+
+    def _metrics_key(self, runtime_id: str, queue_tier: str | AsyncQueueTier) -> str:
+        return f"{self.key_prefix}:queue:{self._queue_name(runtime_id, queue_tier)}:metrics"
+
+    def _failure_reasons_key(self, runtime_id: str, queue_tier: str | AsyncQueueTier) -> str:
+        return (
+            f"{self.key_prefix}:queue:{self._queue_name(runtime_id, queue_tier)}:failure_reasons"
+        )
 
     async def _record_enqueue_count(
-        self, queue_tier: str | AsyncQueueTier, count: int
+        self, runtime_id: str, queue_tier: str | AsyncQueueTier, count: int
     ) -> None:
         if count <= 0:
             return
-        key = self._metrics_key(queue_tier)
+        key = self._metrics_key(runtime_id, queue_tier)
         pipe = self.redis.pipeline(transaction=True)
         pipe.hsetnx(key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
         pipe.hincrby(key, METRICS_ENQUEUED_FIELD, count)
         await pipe.execute()
 
     async def _record_dequeue_count(
-        self, queue_tier: str | AsyncQueueTier, count: int
+        self, runtime_id: str, queue_tier: str | AsyncQueueTier, count: int
     ) -> None:
         if count <= 0:
             return
-        key = self._metrics_key(queue_tier)
+        key = self._metrics_key(runtime_id, queue_tier)
         pipe = self.redis.pipeline(transaction=True)
         pipe.hsetnx(key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
         pipe.hincrby(key, METRICS_DEQUEUED_FIELD, count)
         await pipe.execute()
 
     async def _record_task_running_delta(
-        self, queue_tier: str | AsyncQueueTier, delta: int
+        self, runtime_id: str, queue_tier: str | AsyncQueueTier, delta: int
     ) -> None:
-        key = self._metrics_key(queue_tier)
+        key = self._metrics_key(runtime_id, queue_tier)
         pipe = self.redis.pipeline(transaction=True)
         pipe.hsetnx(key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
         pipe.hincrby(key, METRICS_RUNNING_TASKS_FIELD, delta)
         await pipe.execute()
 
     async def submit(self, request: CheckRequest) -> AsyncSubmitResponse:
+        runtime_id = request.runtime_id or self.settings.default_runtime_id
         n = len(request.snippets)
         queue_depth = sum(
-            await asyncio.gather(*(queue.length() for queue in self.queues.values()))
+            await asyncio.gather(
+                *(
+                    self._task_queue(runtime_id, tier).length()
+                    for tier in (AsyncQueueTier.light, AsyncQueueTier.heavy)
+                )
+            )
         )
         logger.debug(
             "Async submit preflight (redis): queues={} depth={} incoming={} backlog_limit={}",
-            list(self.queue_names.values()),
+            [
+                self._queue_name(runtime_id, AsyncQueueTier.light),
+                self._queue_name(runtime_id, AsyncQueueTier.heavy),
+            ],
             queue_depth,
             n,
             self.backlog_limit,
@@ -281,7 +309,10 @@ class RedisAsyncJobs:
         if queue_depth + n > self.backlog_limit:
             logger.warning(
                 "Async submit rejected (redis): queues={} depth={} incoming={} backlog_limit={}",
-                list(self.queue_names.values()),
+                [
+                    self._queue_name(runtime_id, AsyncQueueTier.light),
+                    self._queue_name(runtime_id, AsyncQueueTier.heavy),
+                ],
                 queue_depth,
                 n,
                 self.backlog_limit,
@@ -307,6 +338,7 @@ class RedisAsyncJobs:
                 job_id=job_id,
                 task_id=uuid4().hex,
                 index=i,
+                runtime_id=runtime_id,
                 snippet=snippet,
                 queue_tier=queue_tier.value,
                 timeout=float(request.timeout),
@@ -327,6 +359,7 @@ class RedisAsyncJobs:
                 "failed": "0",
                 "running": "0",
                 "queue_tiers": ",".join(sorted(tier.value for tier in tasks_by_tier)),
+                "runtime_id": runtime_id,
                 "created_at": queued_at,
                 "updated_at": queued_at,
                 "expires_at": expires_at,
@@ -343,7 +376,7 @@ class RedisAsyncJobs:
                 mapping={str(task.index): AsyncJobStatus.queued.value for task in tasks},
             )
             for queue_tier in tasks_by_tier:
-                metrics_key = self._metrics_key(queue_tier)
+                metrics_key = self._metrics_key(runtime_id, queue_tier)
                 pipe.hsetnx(metrics_key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
                 pipe.hincrby(metrics_key, METRICS_INFLIGHT_JOBS_FIELD, 1)
         pipe.expire(meta_key, self.ttl_sec)
@@ -362,13 +395,13 @@ class RedisAsyncJobs:
 
         try:
             for queue_tier, tier_tasks in tasks_by_tier.items():
-                await self.queues[queue_tier].enqueue_many(tier_tasks)
-                await self._record_enqueue_count(queue_tier, len(tier_tasks))
+                await self._task_queue(runtime_id, queue_tier).enqueue_many(tier_tasks)
+                await self._record_enqueue_count(runtime_id, queue_tier, len(tier_tasks))
                 job_logger.debug(
                     "Async job enqueued (redis): job_id={} tasks={} queue={} tier={}",
                     job_id,
                     len(tier_tasks),
-                    self.queue_names[queue_tier],
+                    self._queue_name(runtime_id, queue_tier),
                     queue_tier.value,
                 )
         except Exception as e:
@@ -379,7 +412,10 @@ class RedisAsyncJobs:
             job_logger.exception(
                 "Async job enqueue failed (redis): job_id={} queues={} error={}",
                 job_id,
-                list(self.queue_names.values()),
+                [
+                    self._queue_name(runtime_id, AsyncQueueTier.light),
+                    self._queue_name(runtime_id, AsyncQueueTier.heavy),
+                ],
                 e,
             )
             raise
@@ -449,16 +485,20 @@ class RedisAsyncJobs:
         self,
         timeout_sec: int = 1,
         queue_tier: str | AsyncQueueTier | None = None,
+        runtime_id: str | None = None,
     ) -> AsyncTaskPayload | None:
+        effective_runtime_id = runtime_id or self.settings.runtime_id
         requested = (
             AsyncQueueTier.all
             if queue_tier is None
             else self._normalize_tier(queue_tier)
         )
         if requested != AsyncQueueTier.all:
-            task = await self.queues[requested].dequeue(timeout_sec=timeout_sec)
+            task = await self._task_queue(effective_runtime_id, requested).dequeue(
+                timeout_sec=timeout_sec
+            )
             if task is not None:
-                await self._record_dequeue_count(requested, 1)
+                await self._record_dequeue_count(effective_runtime_id, requested, 1)
             return task
 
         order = [AsyncQueueTier.light, AsyncQueueTier.heavy]
@@ -467,14 +507,16 @@ class RedisAsyncJobs:
         self._dequeue_turn += 1
         for idx, tier in enumerate(order):
             if idx < len(order) - 1:
-                if await self.queues[tier].length() <= 0:
+                if await self._task_queue(effective_runtime_id, tier).length() <= 0:
                     continue
                 wait = 1
             else:
                 wait = timeout_sec
-            task = await self.queues[tier].dequeue(timeout_sec=wait)
+            task = await self._task_queue(effective_runtime_id, tier).dequeue(
+                timeout_sec=wait
+            )
             if task is not None:
-                await self._record_dequeue_count(tier, 1)
+                await self._record_dequeue_count(effective_runtime_id, tier, 1)
                 return task
         return None
 
@@ -519,7 +561,9 @@ class RedisAsyncJobs:
             pipe.hset(task_states_key, str(task.index), AsyncJobStatus.running.value)
             pipe.hincrby(meta_key, "running", 1)
             pipe.hincrby(
-                self._metrics_key(task.queue_tier), METRICS_RUNNING_TASKS_FIELD, 1
+                self._metrics_key(task.runtime_id, task.queue_tier),
+                METRICS_RUNNING_TASKS_FIELD,
+                1,
             )
         pipe.expire(meta_key, self.ttl_sec)
         pipe.expire(self._results_key(task.job_id), self.ttl_sec)
@@ -585,7 +629,9 @@ class RedisAsyncJobs:
         if state == AsyncJobStatus.running.value:
             pipe.hincrby(meta_key, "running", -1)
             pipe.hincrby(
-                self._metrics_key(task.queue_tier), METRICS_RUNNING_TASKS_FIELD, -1
+                self._metrics_key(task.runtime_id, task.queue_tier),
+                METRICS_RUNNING_TASKS_FIELD,
+                -1,
             )
         if is_failure:
             pipe.hincrby(meta_key, "failed", 1)
@@ -638,7 +684,7 @@ class RedisAsyncJobs:
             seen_tiers.add(task.queue_tier)
             for queue_tier in seen_tiers:
                 pipe.hincrby(
-                    self._metrics_key(queue_tier),
+                    self._metrics_key(task.runtime_id, queue_tier),
                     METRICS_INFLIGHT_JOBS_FIELD,
                     -1,
                 )
@@ -657,6 +703,7 @@ class RedisAsyncJobs:
         payload = response.model_dump(exclude_none=True)
         payload.update(
             {
+                "runtime_id": task.runtime_id,
                 "queue_tier": task.queue_tier,
                 "retry_count": task.retry_count,
                 "failure_reason": task.failure_reason,
@@ -675,6 +722,7 @@ class RedisAsyncJobs:
         payload = response.model_dump(exclude_none=True)
         payload.update(
             {
+                "runtime_id": task.runtime_id,
                 "queue_tier": task.queue_tier,
                 "retry_count": task.retry_count,
                 "failure_reason": task.failure_reason,
@@ -686,9 +734,10 @@ class RedisAsyncJobs:
             is_failure=True,
         )
 
-    async def _oldest_queue_age_sec(self, queue_tier: str | AsyncQueueTier) -> float:
-        tier = self._normalize_tier(queue_tier)
-        first = await self.redis.lindex(self.queue_names[tier], 0)
+    async def _oldest_queue_age_sec(
+        self, runtime_id: str, queue_tier: str | AsyncQueueTier
+    ) -> float:
+        first = await self.redis.lindex(self._queue_name(runtime_id, queue_tier), 0)
         if first is None:
             return 0.0
         payload = first.decode("utf-8") if isinstance(first, bytes) else str(first)
@@ -701,16 +750,20 @@ class RedisAsyncJobs:
             return 0.0
         return max((datetime.now(tz=timezone.utc) - enqueued_at).total_seconds(), 0.0)
 
-    async def _tier_metrics(self, queue_tier: AsyncQueueTier) -> AsyncQueueTierMetrics:
-        queue_depth = await self.queues[queue_tier].length()
-        oldest_queued_age_sec = await self._oldest_queue_age_sec(queue_tier)
-        metrics_raw = await self.redis.hgetall(self._metrics_key(queue_tier))
+    async def _tier_metrics(
+        self, runtime_id: str, queue_tier: AsyncQueueTier
+    ) -> AsyncQueueTierMetrics:
+        queue_depth = await self._task_queue(runtime_id, queue_tier).length()
+        oldest_queued_age_sec = await self._oldest_queue_age_sec(runtime_id, queue_tier)
+        metrics_raw = await self.redis.hgetall(self._metrics_key(runtime_id, queue_tier))
         metrics_map = _decode_redis_hash(metrics_raw)
         started_epoch = float(
             metrics_map.get(METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
         )
         elapsed = max(time.time() - started_epoch, 1e-6)
-        reasons_raw = await self.redis.hgetall(self._failure_reasons_key(queue_tier))
+        reasons_raw = await self.redis.hgetall(
+            self._failure_reasons_key(runtime_id, queue_tier)
+        )
         reasons = {
             key: int(value) for key, value in _decode_redis_hash(reasons_raw).items()
         }
@@ -730,7 +783,7 @@ class RedisAsyncJobs:
             failure_reasons=reasons,
         )
 
-    async def _all_meta(self) -> list[dict[str, str]]:
+    async def _all_meta(self, runtime_id: str | None = None) -> list[dict[str, str]]:
         metas: list[dict[str, str]] = []
         cursor: int | str = 0
         pattern = f"{self.key_prefix}:job:*:meta"
@@ -740,24 +793,59 @@ class RedisAsyncJobs:
                 raw = await self.redis.hgetall(key)
                 if not raw:
                     continue
-                metas.append(_decode_redis_hash(raw))
+                decoded = _decode_redis_hash(raw)
+                if runtime_id is not None and decoded.get("runtime_id") != runtime_id:
+                    continue
+                metas.append(decoded)
             if cursor in {0, "0"}:
                 break
         return metas
 
-    async def metrics(self) -> AsyncQueueMetrics:
+    async def metrics(self, runtime_id: str | None = None) -> AsyncQueueMetrics:
+        effective_runtime_ids = [runtime_id] if runtime_id else self.runtime_ids
         tier_metrics = {
-            tier.value: await self._tier_metrics(tier)
+            tier.value: AsyncQueueTierMetrics(
+                queue_depth=0,
+                running_tasks=0,
+                oldest_queued_age_sec=0.0,
+                dequeue_rate=0.0,
+                enqueue_rate=0.0,
+            )
             for tier in (AsyncQueueTier.light, AsyncQueueTier.heavy)
         }
+        for selected_runtime_id in effective_runtime_ids:
+            for tier in (AsyncQueueTier.light, AsyncQueueTier.heavy):
+                tier_metric = await self._tier_metrics(selected_runtime_id, tier)
+                existing = tier_metrics[tier.value]
+                existing.queue_depth += tier_metric.queue_depth
+                existing.running_tasks += tier_metric.running_tasks
+                existing.oldest_queued_age_sec = max(
+                    existing.oldest_queued_age_sec, tier_metric.oldest_queued_age_sec
+                )
+                existing.dequeue_rate += tier_metric.dequeue_rate
+                existing.enqueue_rate += tier_metric.enqueue_rate
+                existing.warm_repls += tier_metric.warm_repls
+                existing.cold_starts += tier_metric.cold_starts
+                existing.spawn_failures += tier_metric.spawn_failures
+                existing.retries += tier_metric.retries
+                existing.exhausted_retries += tier_metric.exhausted_retries
+                for reason, count in tier_metric.failure_reasons.items():
+                    existing.failure_reasons[reason] = (
+                        existing.failure_reasons.get(reason, 0) + count
+                    )
         inflight_candidates: list[int] = []
-        for tier in (AsyncQueueTier.light, AsyncQueueTier.heavy):
-            metrics_map = _decode_redis_hash(await self.redis.hgetall(self._metrics_key(tier)))
-            value = metrics_map.get(METRICS_INFLIGHT_JOBS_FIELD)
-            if value is not None:
-                inflight_candidates.append(max(int(value), 0))
+        for selected_runtime_id in effective_runtime_ids:
+            for tier in (AsyncQueueTier.light, AsyncQueueTier.heavy):
+                metrics_map = _decode_redis_hash(
+                    await self.redis.hgetall(self._metrics_key(selected_runtime_id, tier))
+                )
+                value = metrics_map.get(METRICS_INFLIGHT_JOBS_FIELD)
+                if value is not None:
+                    inflight_candidates.append(max(int(value), 0))
         if not inflight_candidates:
-            inflight_jobs, running_tasks = _metrics_from_meta_snapshots(await self._all_meta())
+            inflight_jobs, running_tasks = _metrics_from_meta_snapshots(
+                await self._all_meta(runtime_id=runtime_id)
+            )
         else:
             inflight_jobs = max(inflight_candidates)
             running_tasks = sum(metric.running_tasks for metric in tier_metrics.values())
@@ -826,19 +914,21 @@ class RedisAsyncJobs:
                     },
                 )
                 for queue_tier, tier_payloads in payloads_by_tier.items():
+                    runtime_id = AsyncTaskPayload.model_validate_json(tier_payloads[0]).runtime_id
                     pipe.hincrby(
-                        self._metrics_key(queue_tier),
+                        self._metrics_key(runtime_id, queue_tier),
                         METRICS_RUNNING_TASKS_FIELD,
                         -len(tier_payloads),
                     )
-                    pipe.rpush(self.queue_names[queue_tier], *tier_payloads)
+                    pipe.rpush(self._queue_name(runtime_id, queue_tier), *tier_payloads)
                 pipe.expire(self._meta_key(job_id), self.ttl_sec)
                 pipe.expire(self._results_key(job_id), self.ttl_sec)
                 pipe.expire(self._tasks_key(job_id), self.ttl_sec)
                 pipe.expire(self._task_states_key(job_id), self.ttl_sec)
                 await pipe.execute()
                 for queue_tier, tier_payloads in payloads_by_tier.items():
-                    await self._record_enqueue_count(queue_tier, len(tier_payloads))
+                    runtime_id = AsyncTaskPayload.model_validate_json(tier_payloads[0]).runtime_id
+                    await self._record_enqueue_count(runtime_id, queue_tier, len(tier_payloads))
                 recovered += len(payloads)
                 logger.warning(
                     "Recovered async running tasks after worker restart: job_id={} recovered_tasks={}",
@@ -853,6 +943,7 @@ class RedisAsyncJobs:
         self,
         *,
         queue_tier: str | AsyncQueueTier,
+        runtime_id: str | None = None,
         warm_repls: int | None = None,
         cold_starts: int = 0,
         spawn_failures: int = 0,
@@ -861,7 +952,8 @@ class RedisAsyncJobs:
         failure_reason: str | None = None,
     ) -> None:
         tier = self._normalize_tier(queue_tier)
-        key = self._metrics_key(tier)
+        effective_runtime_id = runtime_id or self.settings.runtime_id
+        key = self._metrics_key(effective_runtime_id, tier)
         pipe = self.redis.pipeline(transaction=True)
         pipe.hsetnx(key, METRICS_STARTED_AT_FIELD, f"{time.time():.6f}")
         if warm_repls is not None:
@@ -875,13 +967,19 @@ class RedisAsyncJobs:
         if exhausted_retries:
             pipe.hincrby(key, METRICS_EXHAUSTED_RETRIES_FIELD, exhausted_retries)
         if failure_reason:
-            pipe.hincrby(self._failure_reasons_key(tier), failure_reason, 1)
+            pipe.hincrby(
+                self._failure_reasons_key(effective_runtime_id, tier), failure_reason, 1
+            )
         await pipe.execute()
 
     async def close(self) -> None:
         logger.debug(
             "Closing async jobs backend (redis): queues={}",
-            list(self.queue_names.values()),
+            [
+                self._queue_name(runtime_id, tier)
+                for runtime_id in self.runtime_ids
+                for tier in (AsyncQueueTier.light, AsyncQueueTier.heavy)
+            ],
         )
         await self.redis.aclose()
 
@@ -897,36 +995,17 @@ class InMemoryAsyncJobs:
         self.ttl_sec = ttl_sec
         self.backlog_limit = backlog_limit
         self.settings = settings or Settings(_env_file=None)
-        self.queues: dict[AsyncQueueTier, InMemoryTaskQueue] = {
-            AsyncQueueTier.light: InMemoryTaskQueue(),
-            AsyncQueueTier.heavy: InMemoryTaskQueue(),
-        }
+        self.runtime_ids = _known_runtime_ids(self.settings)
+        self.queues: dict[str, InMemoryTaskQueue] = {}
         self._meta: dict[str, dict[str, Any]] = {}
         self._results: dict[str, list[dict[str, Any] | None]] = {}
         self._lock = asyncio.Lock()
         self._created_at_monotonic = time.monotonic()
         self._inflight_jobs = 0
-        self._running_tasks_by_tier: dict[str, int] = {"light": 0, "heavy": 0}
-        self._enqueue_count_by_tier: dict[str, int] = {"light": 0, "heavy": 0}
-        self._dequeue_count_by_tier: dict[str, int] = {"light": 0, "heavy": 0}
-        self._worker_metrics_by_tier: dict[str, dict[str, Any]] = {
-            "light": {
-                "warm_repls": 0,
-                "cold_starts": 0,
-                "spawn_failures": 0,
-                "retries": 0,
-                "exhausted_retries": 0,
-                "failure_reasons": {},
-            },
-            "heavy": {
-                "warm_repls": 0,
-                "cold_starts": 0,
-                "spawn_failures": 0,
-                "retries": 0,
-                "exhausted_retries": 0,
-                "failure_reasons": {},
-            },
-        }
+        self._running_tasks_by_bucket: dict[str, int] = {}
+        self._enqueue_count_by_bucket: dict[str, int] = {}
+        self._dequeue_count_by_bucket: dict[str, int] = {}
+        self._worker_metrics_by_bucket: dict[str, dict[str, Any]] = {}
         self._dequeue_turn = 0
 
     def _normalize_tier(self, queue_tier: str | AsyncQueueTier) -> AsyncQueueTier:
@@ -934,10 +1013,40 @@ class InMemoryAsyncJobs:
             return queue_tier
         return AsyncQueueTier(queue_tier)
 
+    def _bucket(self, runtime_id: str, queue_tier: str | AsyncQueueTier) -> str:
+        tier = self._normalize_tier(queue_tier)
+        return f"{runtime_id}:{tier.value}"
+
+    def _get_queue(self, runtime_id: str, queue_tier: str | AsyncQueueTier) -> InMemoryTaskQueue:
+        bucket = self._bucket(runtime_id, queue_tier)
+        if bucket not in self.queues:
+            self.queues[bucket] = InMemoryTaskQueue()
+            self._running_tasks_by_bucket.setdefault(bucket, 0)
+            self._enqueue_count_by_bucket.setdefault(bucket, 0)
+            self._dequeue_count_by_bucket.setdefault(bucket, 0)
+            self._worker_metrics_by_bucket.setdefault(
+                bucket,
+                {
+                    "warm_repls": 0,
+                    "cold_starts": 0,
+                    "spawn_failures": 0,
+                    "retries": 0,
+                    "exhausted_retries": 0,
+                    "failure_reasons": {},
+                },
+            )
+        return self.queues[bucket]
+
     async def submit(self, request: CheckRequest) -> AsyncSubmitResponse:
+        runtime_id = request.runtime_id or self.settings.default_runtime_id
         n = len(request.snippets)
         queue_depth = sum(
-            await asyncio.gather(*(queue.length() for queue in self.queues.values()))
+            await asyncio.gather(
+                *(
+                    self._get_queue(runtime_id, tier).length()
+                    for tier in (AsyncQueueTier.light, AsyncQueueTier.heavy)
+                )
+            )
         )
         logger.debug(
             "Async submit preflight (in-memory): queue_depth={} incoming={} backlog_limit={}",
@@ -968,6 +1077,7 @@ class InMemoryAsyncJobs:
                 job_id=job_id,
                 task_id=uuid4().hex,
                 index=i,
+                runtime_id=runtime_id,
                 snippet=snippet,
                 queue_tier=queue_tier.value,
                 timeout=float(request.timeout),
@@ -985,6 +1095,7 @@ class InMemoryAsyncJobs:
                 "done": 0,
                 "failed": 0,
                 "running": 0,
+                "runtime_id": runtime_id,
                 "created_at": queued_at,
                 "updated_at": queued_at,
                 "expires_at": expires_at,
@@ -995,12 +1106,14 @@ class InMemoryAsyncJobs:
                 self._inflight_jobs += 1
 
         for queue_tier, tier_tasks in tasks_by_tier.items():
-            await self.queues[queue_tier].enqueue_many(tier_tasks)
-            self._enqueue_count_by_tier[queue_tier.value] += len(tier_tasks)
+            bucket = self._bucket(runtime_id, queue_tier)
+            await self._get_queue(runtime_id, queue_tier).enqueue_many(tier_tasks)
+            self._enqueue_count_by_bucket[bucket] += len(tier_tasks)
             job_logger.debug(
-                "Async job enqueued (in-memory): job_id={} tasks={} tier={}",
+                "Async job enqueued (in-memory): job_id={} tasks={} runtime_id={} tier={}",
                 job_id,
                 len(tier_tasks),
+                runtime_id,
                 queue_tier.value,
             )
         return AsyncSubmitResponse(
@@ -1055,16 +1168,22 @@ class InMemoryAsyncJobs:
         self,
         timeout_sec: int = 1,
         queue_tier: str | AsyncQueueTier | None = None,
+        runtime_id: str | None = None,
     ) -> AsyncTaskPayload | None:
+        effective_runtime_id = runtime_id or self.settings.runtime_id
         requested = (
             AsyncQueueTier.all
             if queue_tier is None
             else self._normalize_tier(queue_tier)
         )
         if requested != AsyncQueueTier.all:
-            task = await self.queues[requested].dequeue(timeout_sec=timeout_sec)
+            task = await self._get_queue(effective_runtime_id, requested).dequeue(
+                timeout_sec=timeout_sec
+            )
             if task is not None:
-                self._dequeue_count_by_tier[requested.value] += 1
+                self._dequeue_count_by_bucket[
+                    self._bucket(effective_runtime_id, requested)
+                ] += 1
             return task
 
         order = [AsyncQueueTier.light, AsyncQueueTier.heavy]
@@ -1073,14 +1192,16 @@ class InMemoryAsyncJobs:
         self._dequeue_turn += 1
         for idx, tier in enumerate(order):
             if idx < len(order) - 1:
-                if await self.queues[tier].length() <= 0:
+                if await self._get_queue(effective_runtime_id, tier).length() <= 0:
                     continue
                 wait = 1
             else:
                 wait = timeout_sec
-            task = await self.queues[tier].dequeue(timeout_sec=wait)
+            task = await self._get_queue(effective_runtime_id, tier).dequeue(
+                timeout_sec=wait
+            )
             if task is not None:
-                self._dequeue_count_by_tier[tier.value] += 1
+                self._dequeue_count_by_bucket[self._bucket(effective_runtime_id, tier)] += 1
                 return task
         return None
 
@@ -1103,7 +1224,7 @@ class InMemoryAsyncJobs:
                 return
             meta["status"] = AsyncJobStatus.running
             meta["running"] += 1
-            self._running_tasks_by_tier[task.queue_tier] += 1
+            self._running_tasks_by_bucket[self._bucket(task.runtime_id, task.queue_tier)] += 1
             meta["updated_at"] = _now_iso()
             task_logger.debug(
                 "Async task started (in-memory): job_id={} task_id={} index={} snippet_id={}",
@@ -1136,6 +1257,7 @@ class InMemoryAsyncJobs:
             payload = response.model_dump(exclude_none=True)
             payload.update(
                 {
+                    "runtime_id": task.runtime_id,
                     "queue_tier": task.queue_tier,
                     "retry_count": task.retry_count,
                     "failure_reason": task.failure_reason,
@@ -1143,8 +1265,9 @@ class InMemoryAsyncJobs:
             )
             results[task.index] = payload
             meta["running"] = max(meta["running"] - 1, 0)
-            self._running_tasks_by_tier[task.queue_tier] = max(
-                self._running_tasks_by_tier[task.queue_tier] - 1,
+            bucket = self._bucket(task.runtime_id, task.queue_tier)
+            self._running_tasks_by_bucket[bucket] = max(
+                self._running_tasks_by_bucket[bucket] - 1,
                 0,
             )
             meta["done"] += 1
@@ -1194,6 +1317,7 @@ class InMemoryAsyncJobs:
             payload = response.model_dump(exclude_none=True)
             payload.update(
                 {
+                    "runtime_id": task.runtime_id,
                     "queue_tier": task.queue_tier,
                     "retry_count": task.retry_count,
                     "failure_reason": task.failure_reason,
@@ -1201,8 +1325,9 @@ class InMemoryAsyncJobs:
             )
             results[task.index] = payload
             meta["running"] = max(meta["running"] - 1, 0)
-            self._running_tasks_by_tier[task.queue_tier] = max(
-                self._running_tasks_by_tier[task.queue_tier] - 1,
+            bucket = self._bucket(task.runtime_id, task.queue_tier)
+            self._running_tasks_by_bucket[bucket] = max(
+                self._running_tasks_by_bucket[bucket] - 1,
                 0,
             )
             meta["failed"] += 1
@@ -1233,45 +1358,84 @@ class InMemoryAsyncJobs:
         logger.debug("Closing async jobs backend (in-memory)")
         await asyncio.gather(*(queue.close() for queue in self.queues.values()))
 
-    async def metrics(self) -> AsyncQueueMetrics:
+    async def metrics(self, runtime_id: str | None = None) -> AsyncQueueMetrics:
         tier_metrics: dict[str, AsyncQueueTierMetrics] = {}
         oldest_queued_age_sec = 0.0
         elapsed = max(time.monotonic() - self._created_at_monotonic, 1e-6)
         async with self._lock:
-            inflight_jobs = self._inflight_jobs
-            running_tasks = sum(self._running_tasks_by_tier.values())
+            if runtime_id is None:
+                inflight_jobs = self._inflight_jobs
+                running_tasks = sum(self._running_tasks_by_bucket.values())
+            else:
+                inflight_jobs = sum(
+                    1
+                    for meta in self._meta.values()
+                    if meta.get("runtime_id") == runtime_id
+                    and meta["status"] not in {AsyncJobStatus.completed, AsyncJobStatus.failed}
+                )
+                running_tasks = sum(
+                    count
+                    for bucket, count in self._running_tasks_by_bucket.items()
+                    if bucket.startswith(f"{runtime_id}:")
+                )
             for tier in (AsyncQueueTier.light, AsyncQueueTier.heavy):
-                queue_depth = await self.queues[tier].length()
-                queue_data = list(getattr(self.queues[tier]._q, "_queue", []))
+                selected_runtime_ids = self.runtime_ids if runtime_id is None else [runtime_id]
+                queue_depth = 0
                 tier_oldest = 0.0
-                if queue_data:
-                    first = queue_data[0]
-                    try:
-                        task = AsyncTaskPayload.model_validate_json(first)
-                        enqueued_at = _iso_to_datetime(task.enqueued_at)
-                        if enqueued_at is not None:
-                            tier_oldest = max(
-                                (
-                                    datetime.now(tz=timezone.utc) - enqueued_at
-                                ).total_seconds(),
-                                0.0,
-                            )
-                    except Exception:
-                        tier_oldest = 0.0
-                oldest_queued_age_sec = max(oldest_queued_age_sec, tier_oldest)
-                worker_metrics = self._worker_metrics_by_tier[tier.value]
+                running = 0
+                dequeue_rate = 0.0
+                enqueue_rate = 0.0
+                warm_repls = 0
+                cold_starts = 0
+                spawn_failures = 0
+                retries = 0
+                exhausted_retries = 0
+                failure_reasons: dict[str, int] = {}
+                for selected_runtime_id in selected_runtime_ids:
+                    queue = self._get_queue(selected_runtime_id, tier)
+                    bucket = self._bucket(selected_runtime_id, tier)
+                    queue_depth += await queue.length()
+                    queue_data = list(getattr(queue._q, "_queue", []))
+                    bucket_oldest = 0.0
+                    if queue_data:
+                        first = queue_data[0]
+                        try:
+                            task = AsyncTaskPayload.model_validate_json(first)
+                            enqueued_at = _iso_to_datetime(task.enqueued_at)
+                            if enqueued_at is not None:
+                                bucket_oldest = max(
+                                    (
+                                        datetime.now(tz=timezone.utc) - enqueued_at
+                                    ).total_seconds(),
+                                    0.0,
+                                )
+                        except Exception:
+                            bucket_oldest = 0.0
+                    tier_oldest = max(tier_oldest, bucket_oldest)
+                    oldest_queued_age_sec = max(oldest_queued_age_sec, bucket_oldest)
+                    worker_metrics = self._worker_metrics_by_bucket[bucket]
+                    running += self._running_tasks_by_bucket[bucket]
+                    dequeue_rate += self._dequeue_count_by_bucket[bucket] / elapsed
+                    enqueue_rate += self._enqueue_count_by_bucket[bucket] / elapsed
+                    warm_repls += worker_metrics["warm_repls"]
+                    cold_starts += worker_metrics["cold_starts"]
+                    spawn_failures += worker_metrics["spawn_failures"]
+                    retries += worker_metrics["retries"]
+                    exhausted_retries += worker_metrics["exhausted_retries"]
+                    for reason, count in worker_metrics["failure_reasons"].items():
+                        failure_reasons[reason] = failure_reasons.get(reason, 0) + count
                 tier_metrics[tier.value] = AsyncQueueTierMetrics(
                     queue_depth=queue_depth,
-                    running_tasks=self._running_tasks_by_tier[tier.value],
+                    running_tasks=running,
                     oldest_queued_age_sec=tier_oldest,
-                    dequeue_rate=self._dequeue_count_by_tier[tier.value] / elapsed,
-                    enqueue_rate=self._enqueue_count_by_tier[tier.value] / elapsed,
-                    warm_repls=worker_metrics["warm_repls"],
-                    cold_starts=worker_metrics["cold_starts"],
-                    spawn_failures=worker_metrics["spawn_failures"],
-                    retries=worker_metrics["retries"],
-                    exhausted_retries=worker_metrics["exhausted_retries"],
-                    failure_reasons=dict(worker_metrics["failure_reasons"]),
+                    dequeue_rate=dequeue_rate,
+                    enqueue_rate=enqueue_rate,
+                    warm_repls=warm_repls,
+                    cold_starts=cold_starts,
+                    spawn_failures=spawn_failures,
+                    retries=retries,
+                    exhausted_retries=exhausted_retries,
+                    failure_reasons=failure_reasons,
                 )
         return AsyncQueueMetrics(
             queue_depth=sum(metric.queue_depth for metric in tier_metrics.values()),
@@ -1290,6 +1454,7 @@ class InMemoryAsyncJobs:
         self,
         *,
         queue_tier: str | AsyncQueueTier,
+        runtime_id: str | None = None,
         warm_repls: int | None = None,
         cold_starts: int = 0,
         spawn_failures: int = 0,
@@ -1298,8 +1463,12 @@ class InMemoryAsyncJobs:
         failure_reason: str | None = None,
     ) -> None:
         tier = self._normalize_tier(queue_tier)
+        effective_runtime_id = runtime_id or self.settings.runtime_id
+        self._get_queue(effective_runtime_id, tier)
         async with self._lock:
-            bucket = self._worker_metrics_by_tier[tier.value]
+            bucket = self._worker_metrics_by_bucket[
+                self._bucket(effective_runtime_id, tier)
+            ]
             if warm_repls is not None:
                 bucket["warm_repls"] = max(warm_repls, 0)
             bucket["cold_starts"] += cold_starts
@@ -1344,18 +1513,11 @@ async def create_async_jobs(settings: Settings) -> AsyncJobs:
     )
     return RedisAsyncJobs(
         redis=redis,
-        queues={
-            AsyncQueueTier.light: RedisTaskQueue(
-                redis=redis, queue_name=settings.async_queue_name_light
-            ),
-            AsyncQueueTier.heavy: RedisTaskQueue(
-                redis=redis, queue_name=settings.async_queue_name_heavy
-            ),
-        },
-        queue_names={
+        base_queue_names={
             AsyncQueueTier.light: settings.async_queue_name_light,
             AsyncQueueTier.heavy: settings.async_queue_name_heavy,
         },
+        runtime_ids=_known_runtime_ids(settings),
         key_prefix=settings.async_redis_key_prefix,
         ttl_sec=settings.async_result_ttl_sec,
         backlog_limit=settings.async_backlog_limit,

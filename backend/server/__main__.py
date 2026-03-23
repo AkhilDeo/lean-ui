@@ -5,8 +5,8 @@ from typing import Any
 import uvicorn
 from loguru import logger
 
-from .main import app
-from .settings import Environment, settings
+from .asgi import app, settings
+from .settings import Environment
 
 
 class InterceptHandler(logging.Handler):
@@ -36,7 +36,7 @@ if __name__ == "__main__":
         app,
         host=settings.host,
         port=settings.port,
-        backlog=4096,  # On Google Cloud VMs: `cat /proc/sys/net/core/somaxconn` = 4096
+        backlog=4096,
         use_colors=settings.environment != Environment.prod,
         log_config=None,
     )

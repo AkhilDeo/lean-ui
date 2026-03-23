@@ -12,6 +12,7 @@ class NormalizedRequestPolicy:
     timeout: float
     debug: bool
     reuse: bool
+    runtime_id: str
 
 
 def normalize_request_policy(
@@ -29,10 +30,14 @@ def normalize_request_policy(
 
     effective_debug = debug if settings.allow_client_debug else False
     effective_reuse = reuse if settings.allow_client_reuse_override else True
+    effective_runtime_id = (
+        settings.default_runtime_id if settings.gateway_enabled else settings.runtime_id
+    )
     return NormalizedRequestPolicy(
         timeout=effective_timeout,
         debug=effective_debug,
         reuse=effective_reuse,
+        runtime_id=effective_runtime_id,
     )
 
 
@@ -48,5 +53,6 @@ def normalize_check_request(request: CheckRequest, settings: Settings) -> CheckR
             "timeout": int(policy.timeout),
             "debug": policy.debug,
             "reuse": policy.reuse,
+            "runtime_id": request.runtime_id or policy.runtime_id,
         }
     )

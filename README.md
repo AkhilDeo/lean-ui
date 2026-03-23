@@ -5,7 +5,7 @@
 **A modern web interface for verifying Lean proofs**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Lean](https://img.shields.io/badge/Lean-4.15-purple)](https://leanprover.github.io/)
+[![Lean](https://img.shields.io/badge/Lean-4.28-purple)](https://leanprover.github.io/)
 
 [Features](#features) • [Quick Start](#quick-start) • [Usage](#usage) • [Tech Stack](#tech-stack) • [Contributing](#contributing)
 
@@ -22,7 +22,7 @@
 
 ## Screenshot
 
-![Lean 4.15 Verifier](./screenshot.png)
+![Lean Runtime Gateway](./screenshot.png)
 
 ## Quick Start
 
@@ -66,7 +66,7 @@
    
    Navigate to [http://localhost:3000](http://localhost:3000)
 
-That's it! You should see the Lean 4.15 Verifier interface ready to use.
+That's it! You should see the Lean Runtime Gateway interface ready to use.
 
 ### Stopping the Services
 
@@ -81,12 +81,13 @@ cd backend && docker compose down
 
 ### Basic Workflow
 
-1. **Write Lean Code** - Enter your Lean 4.15 code in the Monaco editor
-2. **Add Title (Optional)** - Give your verification a descriptive name, or let it auto-generate
-3. **Click Verify** - Submit your code for verification
-4. **View Results** - See success, errors, or warnings in the results panel
-5. **Browse History** - Access past verifications from the sidebar
-6. **Manage History** - Delete individual entries or clear all history
+1. **Pick a Runtime** - Choose a supported Lean 4 + Mathlib runtime (default: Lean 4.28)
+2. **Write Lean Code** - Enter your Lean code in the Monaco editor
+3. **Add Title (Optional)** - Give your verification a descriptive name, or let it auto-generate
+4. **Click Verify** - Submit your code for verification
+5. **View Results** - See success, errors, warnings, or queued runtime startup status
+6. **Browse History** - Access past verifications from the sidebar
+7. **Manage History** - Delete individual entries or clear all history
 
 ### Example Lean Code
 
@@ -115,13 +116,14 @@ Create a `.env.local` file in the root directory (optional):
 
 ### Backend Configuration
 
-The backend defaults to Lean 4.15.0. To customize, edit `backend/.env`:
+The backend defaults to Lean 4.28.0. Runtime routing is driven by the backend registry. To customize a local runtime service, edit `backend/.env`:
 
 ```bash
 KIMINA_SERVER_URL=https://lean-ui-production.up.railway.app
 KIMINA_SERVER_API_KEY=your-shared-backend-key
 
-LEAN_SERVER_LEAN_VERSION=v4.15.0  # Change Lean version
+LEAN_SERVER_LEAN_VERSION=v4.28.0  # Runtime Lean version
+LEAN_SERVER_RUNTIME_ID=v4.28.0    # Runtime registry id
 LEAN_SERVER_MAX_REPLS=14           # Max concurrent REPL instances
 LEAN_SERVER_MAX_WAIT=60            # Max wait time in seconds
 ```

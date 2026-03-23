@@ -19,17 +19,23 @@ from server.settings import Environment, Settings
 
 
 @pytest.fixture(params=[])
-def client(request: FixtureRequest) -> TestClient:
+def client(
+    request: FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     defaults = {
         "max_repls": 5,
         "max_repl_uses": 10,
+        "max_repl_mem": 8192,
+        "min_host_free_mem": 128,
         "init_repls": {},
         "database_url": None,
         "environment": Environment.prod,
         "api_key": "test-key",
+        "allow_client_debug": True,
     }
 
     overrides = {**defaults, **getattr(request, "param", {})}
+    monkeypatch.setattr("server.manager.Manager._has_memory_headroom", lambda self: True)
 
     s = Settings(_env_file=None)
     for k, v in overrides.items():
@@ -46,15 +52,21 @@ def client(request: FixtureRequest) -> TestClient:
         {
             "max_repls": 5,
             "max_repl_uses": 10,
+            "max_repl_mem": 8192,
+            "min_host_free_mem": 128,
             "init_repls": {},
             "database_url": None,
             "environment": Environment.prod,
             "api_key": "test-key",
+            "allow_client_debug": False,
         },
     ]
 )
-def root_client(request: FixtureRequest) -> TestClient:
+def root_client(
+    request: FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
     overrides = getattr(request, "param", {})
+    monkeypatch.setattr("server.manager.Manager._has_memory_headroom", lambda self: True)
     s = Settings(_env_file=None)
     for k, v in overrides.items():
         setattr(s, k, v)

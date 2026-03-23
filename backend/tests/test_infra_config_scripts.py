@@ -3,13 +3,27 @@ from __future__ import annotations
 from pathlib import Path
 
 from scripts.check_railway_state import assert_limits, assert_replicas
-from scripts.validate_async_env import missing_keys
+from scripts.validate_async_env import missing_keys, required_keys_for_role
 
 
 def test_missing_keys_utility() -> None:
     required = {"A", "B", "C"}
     env = {"A": "1", "C": "3"}
     assert missing_keys(required, env) == ["B"]
+
+
+def test_gateway_role_requires_seeded_runtime_service_ids_and_base_urls() -> None:
+    required = required_keys_for_role("gateway")
+    assert "LEAN_SERVER_RAILWAY_ENVIRONMENT_ID" in required
+    assert "LEAN_SERVER_RUNTIME_V4_9_0_SERVICE_ID" in required
+    assert "LEAN_SERVER_RUNTIME_V4_28_0_BASE_URL" in required
+
+
+def test_runtime_role_requires_single_runtime_service_wiring() -> None:
+    required = required_keys_for_role("runtime")
+    assert "LEAN_SERVER_RUNTIME_ID" in required
+    assert "LEAN_SERVER_RUNTIME_SERVICE_ID" in required
+    assert "LEAN_SERVER_RAILWAY_ENVIRONMENT_ID" in required
 
 
 def test_assert_limits_and_replicas_helpers() -> None:
@@ -44,5 +58,5 @@ def test_setup_defaults_single_mathlib_runtime() -> None:
     setup_script = (
         Path(__file__).resolve().parents[1] / "setup.sh"
     ).read_text(encoding="utf-8")
-    assert "https://github.com/FrederickPu/repl.git" in setup_script
-    assert 'REPL_BRANCH="${REPL_BRANCH:-lean415compat}"' in setup_script
+    assert "https://github.com/leanprover-community/repl.git" in setup_script
+    assert 'REPL_BRANCH="${REPL_BRANCH:-$LEAN_SERVER_LEAN_VERSION}"' in setup_script

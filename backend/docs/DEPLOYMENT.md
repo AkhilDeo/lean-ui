@@ -1,59 +1,85 @@
-# Guide to deploy on Google Cloud
+# Railway Multi-Runtime Deployment
 
-## Why not Cloud Run?
+This backend now runs in two service modes on Railway:
 
-This here is a guide to help you deploy this Lean server on Google Cloud
-(no affiliation to Google, it's just that it's where our server runs). 
-Initially, I wanted to use Cloud Run to deploy revisions of the container
-in a scalable way, but there are two problems:
-- available machines have specs that go up to 16 vCPUs and 64 GB RAM (that's 16 REPLs)
-- REPLs require high I/O throughput (SSD or NVMe) and Cloud Run doesn't offer this type of disk
+- `gateway`: always-on API service that validates runtime ids, proxies warm sync checks, wakes cold runtimes, and serves async job status.
+- `runtime`: one service per seeded Lean/Mathlib runtime. Each runtime serves `/api/check`, drains only its own async work, and scales back to zero when idle.
 
-So I ended up deploying on regular VMs, using instance templates and an instance group. 
-The instance group manages between min and max instances from an instance template. 
-It sits behind a load balancer which acts as the entry point to the API requests. 
+## Seeded runtimes
 
-## Managed Instance Group
+- `v4.9.0`
+- `v4.15.0`
+- `v4.19.0`
+- `v4.21.0`
+- `v4.26.0`
+- `v4.27.0`
+- `v4.28.0`
 
-## Instance Group
+## Gateway service
 
-Create an Instance Group:
-- choose stateless managed
-- link to an instance template
-- min/max as you see fit
-- cpu utilization 60% to scale
-- init period 60s
-- update instance configuration on repair
-- port mapping port 80
+Required core env:
 
-## Load Balancer
+```sh
+LEAN_SERVER_ENVIRONMENT=prod
+LEAN_SERVER_GATEWAY_ENABLED=true
+LEAN_SERVER_EMBEDDED_WORKER_ENABLED=false
+LEAN_SERVER_ASYNC_ENABLED=true
+LEAN_SERVER_DEFAULT_RUNTIME_ID=v4.28.0
+LEAN_SERVER_RAILWAY_ENVIRONMENT_ID=<railway-environment-id>
+LEAN_SERVER_REDIS_URL=<shared-redis-url>
+LEAN_SERVER_API_KEY=<shared-api-key>
+```
 
-Create a Load Balancer:
-- external & regional
-- frontend configuration:
-    - name
-    - protocol http
-    - premium ip address
-    - port 80
-    - keepalive??
+Required per-runtime Railway wiring:
 
-## Backend service
-- create backend server
-    - type instance group
-    - http
-    - timeout 1200
-    - only ipv4
-    - create backend
-        - new backend select instance group
-        - utilization 100%
-    - create health check
-    - enable logging?
-    - security: cloud armor backend security policy
-- routing rules: simplest host and path rules
+```sh
+LEAN_SERVER_RUNTIME_V4_9_0_SERVICE_ID=<service-id>
+LEAN_SERVER_RUNTIME_V4_9_0_BASE_URL=<private-url>
+LEAN_SERVER_RUNTIME_V4_15_0_SERVICE_ID=<service-id>
+LEAN_SERVER_RUNTIME_V4_15_0_BASE_URL=<private-url>
+LEAN_SERVER_RUNTIME_V4_19_0_SERVICE_ID=<service-id>
+LEAN_SERVER_RUNTIME_V4_19_0_BASE_URL=<private-url>
+LEAN_SERVER_RUNTIME_V4_21_0_SERVICE_ID=<service-id>
+LEAN_SERVER_RUNTIME_V4_21_0_BASE_URL=<private-url>
+LEAN_SERVER_RUNTIME_V4_26_0_SERVICE_ID=<service-id>
+LEAN_SERVER_RUNTIME_V4_26_0_BASE_URL=<private-url>
+LEAN_SERVER_RUNTIME_V4_27_0_SERVICE_ID=<service-id>
+LEAN_SERVER_RUNTIME_V4_27_0_BASE_URL=<private-url>
+LEAN_SERVER_RUNTIME_V4_28_0_SERVICE_ID=<service-id>
+LEAN_SERVER_RUNTIME_V4_28_0_BASE_URL=<private-url>
+```
 
-disable external network access to instance template.
+The gateway will now fail fast at startup if any seeded runtime is missing `SERVICE_ID` or `BASE_URL`.
 
+## Runtime service
 
+Each runtime service gets its own matching Lean version and service id:
 
-The CD pipeline creates an instance template and performs a rolling update of your group. 
+```sh
+LEAN_SERVER_ENVIRONMENT=prod
+LEAN_SERVER_GATEWAY_ENABLED=false
+LEAN_SERVER_EMBEDDED_WORKER_ENABLED=true
+LEAN_SERVER_ASYNC_ENABLED=true
+LEAN_SERVER_RUNTIME_ID=v4.28.0
+LEAN_SERVER_LEAN_VERSION=v4.28.0
+LEAN_SERVER_RUNTIME_SERVICE_ID=<this-runtime-service-id>
+LEAN_SERVER_RAILWAY_ENVIRONMENT_ID=<railway-environment-id>
+LEAN_SERVER_REDIS_URL=<shared-redis-url>
+LEAN_SERVER_API_KEY=<shared-api-key>
+LEAN_SERVER_INIT_REPLS={}
+```
 
+The runtime will fail fast if `LEAN_SERVER_RUNTIME_ID`, `LEAN_SERVER_RUNTIME_SERVICE_ID`, or `LEAN_SERVER_RAILWAY_ENVIRONMENT_ID` is missing, if `LEAN_SERVER_LEAN_VERSION` does not match the runtime id, or if `LEAN_SERVER_INIT_REPLS` is non-empty while the embedded worker is enabled.
+
+## Validation
+
+Use the env validation helper before deploy:
+
+```sh
+python scripts/validate_async_env.py gateway
+python scripts/validate_async_env.py runtime
+```
+
+## Logging
+
+Google Cloud Logging has been removed from the backend. Railway log capture is the supported production log sink.

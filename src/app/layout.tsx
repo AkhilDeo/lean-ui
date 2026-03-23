@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Lean 4.15 Verifier",
-  description: "Verify Lean 4.15 proofs with kimina-lean-server",
+  title: "Lean Runtime Gateway",
+  description: "Verify Mathlib proofs across cold-start Lean 4 runtimes",
 };
 
 export default function RootLayout({

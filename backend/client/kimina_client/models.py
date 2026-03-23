@@ -348,6 +348,13 @@ class CheckRequest(BaseRequest):
     snippets: list[Snippet] = Field(
         description="List of snippets to validate (batch or single element)"
     )
+    runtime_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional runtime identifier selecting the Lean/Mathlib environment "
+            "used to execute the request."
+        ),
+    )
 
     @model_validator(mode="after")
     def check_snippets(self) -> "CheckRequest":
@@ -373,6 +380,7 @@ class CheckRequest(BaseRequest):
                 "debug": False,
                 "reuse": True,
                 "infotree": "original",
+                "runtime_id": "v4.28.0",
             },
         }
     )

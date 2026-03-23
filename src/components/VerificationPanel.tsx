@@ -15,7 +15,7 @@ export function VerificationPanel({ result, isLoading }: VerificationPanelProps)
     return (
       <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4" />
-        <p>Verifying with Lean 4.15...</p>
+        <p>{result?.progressMessage ?? 'Submitting verification job...'}</p>
       </div>
     );
   }
@@ -63,7 +63,7 @@ export function VerificationPanel({ result, isLoading }: VerificationPanelProps)
         <div className="flex-1">
           <h3 className="font-semibold">{result.title || 'Verification Result'}</h3>
           <p className="text-xs text-muted-foreground">
-            Lean {result.leanVersion} • {new Date(result.timestamp).toLocaleString()}
+            {result.runtimeLabel} • Lean {result.leanVersion} • {new Date(result.timestamp).toLocaleString()}
           </p>
         </div>
         {getStatusBadge()}

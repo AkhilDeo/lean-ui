@@ -13,7 +13,6 @@ from server.async_jobs import (
     RedisAsyncJobs,
 )
 from server.async_tiering import AsyncQueueTier
-from server.async_queue import RedisTaskQueue
 from server.settings import Settings
 
 
@@ -178,18 +177,11 @@ def make_redis_jobs() -> RedisAsyncJobs:
     settings = Settings(_env_file=None)
     return RedisAsyncJobs(
         redis=redis,  # type: ignore[arg-type]
-        queues={
-            AsyncQueueTier.light: RedisTaskQueue(
-                redis=redis, queue_name="lean_async_light"
-            ),
-            AsyncQueueTier.heavy: RedisTaskQueue(
-                redis=redis, queue_name="lean_async_heavy"
-            ),
-        },  # type: ignore[arg-type]
-        queue_names={
+        base_queue_names={
             AsyncQueueTier.light: "lean_async_light",
             AsyncQueueTier.heavy: "lean_async_heavy",
         },
+        runtime_ids=[settings.default_runtime_id],
         key_prefix="lean_async",
         ttl_sec=3600,
         backlog_limit=100,

@@ -19,6 +19,7 @@ class AsyncTaskPayload(BaseModel):
     job_id: str
     task_id: str
     index: int
+    runtime_id: str
     snippet: Snippet
     queue_tier: str
     timeout: float
@@ -37,6 +38,7 @@ class AsyncTaskPayload(BaseModel):
         job_id: str,
         task_id: str,
         index: int,
+        runtime_id: str,
         snippet: Snippet,
         queue_tier: str,
         timeout: float,
@@ -49,6 +51,7 @@ class AsyncTaskPayload(BaseModel):
             job_id=job_id,
             task_id=task_id,
             index=index,
+            runtime_id=runtime_id,
             snippet=snippet,
             queue_tier=queue_tier,
             timeout=timeout,

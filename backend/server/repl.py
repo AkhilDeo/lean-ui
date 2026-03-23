@@ -2,8 +2,11 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 from asyncio.subprocess import Process
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import psutil
@@ -28,6 +31,22 @@ from .settings import Environment, settings
 from .utils import is_blank
 
 log_lock = asyncio.Lock()
+
+
+@lru_cache(maxsize=4)
+def _resolve_lean_path(project_dir: str) -> str:
+    proc = subprocess.run(
+        ["lake", "env", "printenv", "LEAN_PATH"],
+        cwd=project_dir,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    lean_path = proc.stdout.strip()
+    if not lean_path:
+        raise RuntimeError(f"Failed to resolve LEAN_PATH for workspace: {project_dir}")
+    return lean_path
 
 
 async def log_snippet(uuid: UUID, snippet_id: str, code: str) -> None:
@@ -129,16 +148,16 @@ class Repl:
         # TODO: try/catch this bit and raise as REPL startup error.
         self._loop = asyncio.get_running_loop()
         self._stderr_chunks.clear()
+        launch_env = os.environ.copy()
+        launch_env["LEAN_PATH"] = _resolve_lean_path(str(Path(settings.project_dir)))
 
         def _preexec() -> None:
             os.setsid()
 
         self.proc = await asyncio.create_subprocess_exec(
-            "lake",
-            "env",
-            settings.repl_path,
+            str(settings.repl_path),
             cwd=settings.project_dir,
-            env=os.environ,
+            env=launch_env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

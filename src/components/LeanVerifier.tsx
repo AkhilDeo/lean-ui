@@ -6,7 +6,12 @@ import { CodeEditor } from './CodeEditor';
 import { VerificationPanel } from './VerificationPanel';
 import { HistorySidebar } from './HistorySidebar';
 import { useVerificationHistory } from '@/hooks/useVerificationHistory';
-import { VerificationResult, VerifyApiResponse } from '@/types/verification';
+import {
+  RuntimeOption,
+  VerificationResult,
+  VerifyApiResponse,
+  VerifyJobResponse,
+} from '@/types/verification';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -20,12 +25,43 @@ import {
 import { Play, Loader2, Code2, Sparkles } from 'lucide-react';
 import { generateRandomName } from '@/lib/nameGenerator';
 
-const DEFAULT_CODE = `-- Welcome to Lean 4.15 Verifier!
--- Write your Lean code below and click "Verify" to check it.
+const DEFAULT_CODE = `-- Welcome to Lean 4.28 Verifier!
+-- Pick a Lean runtime, write your code, and verify it.
 
 theorem hello_world : 1 + 1 = 2 := by
   rfl
 `;
+
+interface RuntimeApiResponse {
+  defaultRuntimeId: string;
+  runtimes: RuntimeOption[];
+}
+
+function toUiStatus(result: VerifyApiResponse): VerificationResult['status'] {
+  if (result.status === 'sorry') {
+    return 'warning';
+  }
+  if (!result.passed || result.error) {
+    return 'error';
+  }
+  if (result.warnings && result.warnings.length > 0) {
+    return 'warning';
+  }
+  return 'success';
+}
+
+function buildProgressMessage(status: VerifyJobResponse['status'], runtimeLabel: string): string {
+  switch (status) {
+    case 'queued':
+      return `Queued on ${runtimeLabel}. Waiting for runtime to start.`;
+    case 'running':
+      return `Running on ${runtimeLabel}...`;
+    case 'failed':
+      return `Verification failed on ${runtimeLabel}.`;
+    default:
+      return `Submitting to ${runtimeLabel}...`;
+  }
+}
 
 export function LeanVerifier() {
   const [code, setCode] = useState(DEFAULT_CODE);
@@ -36,7 +72,10 @@ export function LeanVerifier() {
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [isResizing, setIsResizing] = useState(false);
+  const [runtimes, setRuntimes] = useState<RuntimeOption[]>([]);
+  const [selectedRuntimeId, setSelectedRuntimeId] = useState('v4.28.0');
   const resizeRef = useRef<HTMLDivElement>(null);
+  const pollingRef = useRef(false);
 
   const {
     history,
@@ -48,10 +87,88 @@ export function LeanVerifier() {
     getVerification,
   } = useVerificationHistory();
 
+  const selectedRuntime =
+    runtimes.find((runtime) => runtime.runtimeId === selectedRuntimeId) ??
+    runtimes.find((runtime) => runtime.isDefault) ??
+    null;
+
+  const applyVerificationOutcome = useCallback(
+    (id: string, runtime: RuntimeOption, result: VerifyApiResponse) => {
+      const updatedResult: Partial<VerificationResult> = {
+        status: toUiStatus(result),
+        errors: result.error ? [result.error] : [],
+        warnings: Array.isArray(result.warnings) ? result.warnings : [],
+        progressMessage: null,
+        jobId: null,
+        runtimeId: runtime.runtimeId,
+        runtimeLabel: runtime.displayName,
+        leanVersion: runtime.leanVersion,
+      };
+      updateVerification(id, updatedResult);
+      setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
+    },
+    [updateVerification]
+  );
+
+  const pollVerificationJob = useCallback(
+    async (id: string, jobId: string, runtime: RuntimeOption) => {
+      pollingRef.current = true;
+      try {
+        while (pollingRef.current) {
+          const response = await fetch(`/api/verify/${jobId}`);
+          const poll = (await response.json()) as VerifyJobResponse;
+
+          if (poll.status === 'completed' && poll.result) {
+            applyVerificationOutcome(id, runtime, poll.result);
+            setIsVerifying(false);
+            return;
+          }
+
+          if (poll.status === 'failed') {
+            const updatedResult: Partial<VerificationResult> = {
+              status: 'error',
+              errors: [poll.error || 'Verification job failed.'],
+              warnings: [],
+              progressMessage: null,
+              jobId: jobId,
+            };
+            updateVerification(id, updatedResult);
+            setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
+            setIsVerifying(false);
+            return;
+          }
+
+          const updatedResult: Partial<VerificationResult> = {
+            progressMessage: buildProgressMessage(poll.status, runtime.displayName),
+            jobId,
+          };
+          updateVerification(id, updatedResult);
+          setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown polling error';
+        const updatedResult: Partial<VerificationResult> = {
+          status: 'error',
+          errors: [`Failed while polling verification job: ${message}`],
+          warnings: [],
+          progressMessage: null,
+        };
+        updateVerification(id, updatedResult);
+        setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
+      } finally {
+        pollingRef.current = false;
+        setIsVerifying(false);
+      }
+    },
+    [applyVerificationOutcome, updateVerification]
+  );
+
   const handleVerify = useCallback(async () => {
-    if (!code.trim()) return;
+    if (!code.trim() || !selectedRuntime) return;
 
     setIsVerifying(true);
+    pollingRef.current = true;
     const id = uuidv4();
     const verificationTitle = title.trim() || generateRandomName();
 
@@ -63,63 +180,76 @@ export function LeanVerifier() {
       errors: [],
       warnings: [],
       timestamp: new Date(),
-      leanVersion: '4.15',
+      progressMessage: `Submitting to ${selectedRuntime.displayName}...`,
+      jobId: null,
+      runtimeId: selectedRuntime.runtimeId,
+      runtimeLabel: selectedRuntime.displayName,
+      leanVersion: selectedRuntime.leanVersion,
     };
 
     addVerification(newVerification);
     setSelectedId(id);
     setCurrentResult(newVerification);
-    setTitle(''); // Clear title field for next verification
+    setTitle('');
 
     try {
       const response = await fetch('/api/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, runtimeId: selectedRuntime.runtimeId }),
       });
 
-      const result: VerifyApiResponse = await response.json();
+      const result = (await response.json()) as VerifyJobResponse;
 
-      const errors: string[] = [];
-      const warnings: string[] = [];
-
-      if (result.error) {
-        errors.push(result.error);
+      if (result.status === 'completed' && result.result) {
+        applyVerificationOutcome(id, selectedRuntime, result.result);
+        setIsVerifying(false);
+        pollingRef.current = false;
+        return;
       }
 
-      if (result.warnings && Array.isArray(result.warnings)) {
-        warnings.push(...result.warnings);
+      if (!result.jobId) {
+        const updatedResult: Partial<VerificationResult> = {
+          status: 'error',
+          errors: [result.error || 'Verification submission failed.'],
+          warnings: [],
+          progressMessage: null,
+        };
+        updateVerification(id, updatedResult);
+        setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
+        setIsVerifying(false);
+        pollingRef.current = false;
+        return;
       }
 
-      let status: VerificationResult['status'] = 'success';
-      if (result.status === 'sorry') {
-        status = 'warning';
-      } else if (!result.passed || errors.length > 0) {
-        status = 'error';
-      } else if (warnings.length > 0) {
-        status = 'warning';
-      }
-
-      const updatedResult: Partial<VerificationResult> = {
-        status,
-        errors,
-        warnings,
+      const queuedUpdate: Partial<VerificationResult> = {
+        jobId: result.jobId,
+        progressMessage: buildProgressMessage(result.status, selectedRuntime.displayName),
       };
-
-      updateVerification(id, updatedResult);
-      setCurrentResult((prev) => (prev ? { ...prev, ...updatedResult } : null));
+      updateVerification(id, queuedUpdate);
+      setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...queuedUpdate } : prev));
+      await pollVerificationJob(id, result.jobId, selectedRuntime);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const updatedResult: Partial<VerificationResult> = {
         status: 'error',
         errors: [`Failed to connect to verification server: ${errorMessage}`],
+        progressMessage: null,
       };
       updateVerification(id, updatedResult);
-      setCurrentResult((prev) => (prev ? { ...prev, ...updatedResult } : null));
-    } finally {
+      setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
       setIsVerifying(false);
+      pollingRef.current = false;
     }
-  }, [code, title, addVerification, updateVerification]);
+  }, [
+    addVerification,
+    applyVerificationOutcome,
+    code,
+    pollVerificationJob,
+    selectedRuntime,
+    title,
+    updateVerification,
+  ]);
 
   const handleSelectHistory = useCallback(
     (id: string) => {
@@ -127,6 +257,7 @@ export function LeanVerifier() {
       if (verification) {
         setSelectedId(id);
         setCode(verification.code);
+        setSelectedRuntimeId(verification.runtimeId);
         setCurrentResult(verification);
       }
     },
@@ -160,10 +291,35 @@ export function LeanVerifier() {
   }, [clearHistory]);
 
   const handleNew = useCallback(() => {
+    pollingRef.current = false;
     setSelectedId(null);
     setCurrentResult(null);
     setCode(DEFAULT_CODE);
     setTitle('');
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRuntimes() {
+      try {
+        const response = await fetch('/api/runtimes');
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as RuntimeApiResponse;
+        if (cancelled) return;
+        setRuntimes(payload.runtimes);
+        setSelectedRuntimeId(payload.defaultRuntimeId);
+      } catch (error) {
+        console.error('Failed to load runtimes:', error);
+      }
+    }
+
+    void loadRuntimes();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -172,9 +328,16 @@ export function LeanVerifier() {
       setSelectedId(latest.id);
       setCode(latest.code);
       setTitle(latest.title);
+      setSelectedRuntimeId(latest.runtimeId);
       setCurrentResult(latest);
     }
   }, [isLoaded, history, selectedId]);
+
+  useEffect(() => {
+    return () => {
+      pollingRef.current = false;
+    };
+  }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -222,7 +385,6 @@ export function LeanVerifier() {
 
   return (
     <div className="h-screen overflow-hidden flex bg-background">
-      {/* History Sidebar */}
       <div className="w-72 shrink-0 min-h-0">
         <HistorySidebar
           history={history}
@@ -234,20 +396,29 @@ export function LeanVerifier() {
         />
       </div>
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        {/* Header */}
         <header className="h-16 border-b border-border flex items-center justify-between px-6 bg-card">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
               <Code2 className="h-5 w-5 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-lg font-bold">Lean 4.15 Verifier</h1>
-              <p className="text-xs text-muted-foreground">Powered by kimina-lean-server</p>
+              <h1 className="text-lg font-bold">Lean Runtime Gateway</h1>
+              <p className="text-xs text-muted-foreground">Async-first verification across Lean 4 runtimes</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <select
+              value={selectedRuntimeId}
+              onChange={(e) => setSelectedRuntimeId(e.target.value)}
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              {runtimes.map((runtime) => (
+                <option key={runtime.runtimeId} value={runtime.runtimeId}>
+                  {runtime.displayName}
+                </option>
+              ))}
+            </select>
             <Input
               placeholder="Verification title (optional)"
               value={title}
@@ -256,13 +427,13 @@ export function LeanVerifier() {
             />
             <Button
               onClick={handleVerify}
-              disabled={isVerifying || !code.trim()}
+              disabled={isVerifying || !code.trim() || !selectedRuntime}
               className="gap-2"
             >
               {isVerifying ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Verifying...
+                  Running...
                 </>
               ) : (
                 <>
@@ -274,9 +445,7 @@ export function LeanVerifier() {
           </div>
         </header>
 
-        {/* Editor and Results */}
         <div className="flex-1 flex min-h-0 overflow-hidden">
-          {/* Code Editor */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0 p-4">
             <div className="flex items-center gap-2 mb-3">
               <Sparkles className="h-4 w-4 text-primary" />
@@ -287,7 +456,6 @@ export function LeanVerifier() {
             </div>
           </div>
 
-          {/* Resize Handle */}
           <div
             className="w-1 bg-border hover:bg-primary/50 cursor-col-resize transition-colors relative group"
             onMouseDown={handleMouseDown}
@@ -295,7 +463,6 @@ export function LeanVerifier() {
             <div className="absolute inset-y-0 -left-1 -right-1" />
           </div>
 
-          {/* Results Panel */}
           <div
             ref={resizeRef}
             className="shrink-0 bg-card min-h-0 flex flex-col"
@@ -306,7 +473,6 @@ export function LeanVerifier() {
         </div>
       </div>
 
-      {/* Clear History Dialog */}
       <Dialog open={showClearDialog} onOpenChange={setShowClearDialog}>
         <DialogContent>
           <DialogHeader>

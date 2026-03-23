@@ -3,20 +3,13 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
 
-from .settings import Environment, settings
-
-try:
-    from google.cloud.logging import Client as GCPClient
-    from google.cloud.logging.handlers import CloudLoggingHandler
-except Exception:  # pragma: no cover - exercised only when GCP logging deps are unavailable
-    GCPClient = None  # type: ignore[assignment]
-    CloudLoggingHandler = None  # type: ignore[assignment]
+from .settings import Environment, Settings
 
 console = Console()
 LOG_FORMAT = "[job_id={extra[job_id]}] {message}"
 
 
-def setup_logging() -> None:
+def setup_logging(settings: Settings) -> None:
     logger.remove()
     logger.configure(extra={"job_id": "-", "task_id": "-", "snippet_id": "-", "endpoint": "-"})
     install(show_locals=True)
@@ -37,19 +30,6 @@ def setup_logging() -> None:
             backtrace=True,
             diagnose=True,
         )
-
-        # Then try to add GCP logging as an additional handler
-        if GCPClient is None or CloudLoggingHandler is None:
-            logger.warning("Google Cloud Logging dependencies not installed; skipping setup")
-        else:
-            try:
-                gcp_client = GCPClient()
-                gcp_handler = CloudLoggingHandler(gcp_client)
-                logger.add(gcp_handler, level="INFO", serialize=True)
-                logger.info("Google Cloud Logging enabled successfully")
-            except Exception as e:
-                # Safe to log warning now since RichHandler is already configured
-                logger.warning(f"Failed to setup Google Cloud Logging: {e}")
     else:
         logger.add(
             RichHandler(
@@ -65,27 +45,3 @@ def setup_logging() -> None:
             backtrace=True,
             diagnose=True,
         )
-
-
-# def gcp_formatter(message: Any) -> None:
-#     record = message.record
-#     log_entry = {
-#         "severity": record["level"].name,
-#         "message": record["message"],
-#         "time": record["time"].isoformat(),
-#         # Optional: Add more structured data as needed
-#         "logging.googleapis.com/sourceLocation": {
-#             "file": record["file"].name,
-#             "line": record["line"],
-#             "function": record["function"],
-#         },
-#     }
-#     # The entire log entry must be a single JSON string
-#     # on one line for Google Cloud Logging to parse it correctly.
-#     print(json.dumps(log_entry))
-
-# logger.add(
-#     gcp_formatter,
-#     level=settings.log_level,
-#     format="{message}",
-# )

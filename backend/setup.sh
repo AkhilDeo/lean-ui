@@ -1,16 +1,30 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
-if [ -f .env ]; then
-  set -a
-  . ./.env
-  set +a
-fi
+dotenv_get() {
+  local key="$1"
+  local value=""
+  if [ -f .env ]; then
+    value="$(grep -E "^${key}=" .env | tail -n 1 | cut -d= -f2- || true)"
+    value="${value%$'\r'}"
+    if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+  fi
+  printf '%s' "$value"
+}
 
-LEAN_SERVER_LEAN_VERSION="${LEAN_SERVER_LEAN_VERSION:-v4.15.0}"
-REPL_REPO_URL="${REPL_REPO_URL:-https://github.com/FrederickPu/repl.git}"
-REPL_BRANCH="${REPL_BRANCH:-lean415compat}"
+LEAN_SERVER_LEAN_VERSION="${LEAN_SERVER_LEAN_VERSION:-$(dotenv_get LEAN_SERVER_LEAN_VERSION)}"
+LEAN_SERVER_LEAN_VERSION="${LEAN_SERVER_LEAN_VERSION:-v4.28.0}"
+REPL_REPO_URL="${REPL_REPO_URL:-$(dotenv_get REPL_REPO_URL)}"
+REPL_REPO_URL="${REPL_REPO_URL:-https://github.com/leanprover-community/repl.git}"
+REPL_BRANCH="${REPL_BRANCH:-$(dotenv_get REPL_BRANCH)}"
+REPL_BRANCH="${REPL_BRANCH:-$LEAN_SERVER_LEAN_VERSION}"
+MATHLIB_REPO_URL="${MATHLIB_REPO_URL:-$(dotenv_get MATHLIB_REPO_URL)}"
 MATHLIB_REPO_URL="${MATHLIB_REPO_URL:-https://github.com/leanprover-community/mathlib4.git}"
+MATHLIB_BRANCH="${MATHLIB_BRANCH:-$(dotenv_get MATHLIB_BRANCH)}"
 MATHLIB_BRANCH="${MATHLIB_BRANCH:-$LEAN_SERVER_LEAN_VERSION}"
 
 command -v curl >/dev/null 2>&1 || { echo >&2 "curl is required"; exit 1; }
@@ -49,7 +63,17 @@ install_repo() {
     git clone --branch "${branch}" --single-branch --depth 1 "$url" "$name"
   fi
   pushd "$name"
-    git checkout "${branch}"
+    git remote set-url origin "$url"
+    if ! git rev-parse --verify --quiet "${branch}^{commit}" >/dev/null; then
+      git fetch --depth 1 origin "refs/tags/${branch}:refs/tags/${branch}" \
+        || git fetch --depth 1 origin "${branch}:${branch}" \
+        || git fetch --depth 1 origin "${branch}"
+    fi
+    if git show-ref --verify --quiet "refs/tags/${branch}"; then
+      git checkout --force --detach "refs/tags/${branch}"
+    else
+      git checkout --force "${branch}"
+    fi
     if [ "$name" = "mathlib4" ]; then
       lake exe cache get
     fi

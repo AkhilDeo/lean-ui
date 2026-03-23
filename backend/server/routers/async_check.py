@@ -17,6 +17,7 @@ from ..async_jobs import (
 )
 from ..auth import require_key
 from ..request_policy import normalize_check_request
+from ..runtime_gateway import RuntimeGateway
 from ..settings import Settings
 from .check import get_runtime_settings
 
@@ -32,6 +33,10 @@ def get_async_jobs(request: Request) -> AsyncJobs:
             detail="Async queue API is not enabled on this service",
         )
     return cast(AsyncJobs, jobs)
+
+
+def get_runtime_gateway(request: Request) -> RuntimeGateway | None:
+    return cast(RuntimeGateway | None, getattr(request.app.state, "runtime_gateway", None))
 
 
 @router.post(
@@ -50,9 +55,14 @@ async def submit_async_check(
     request: Request,
     jobs: AsyncJobs = Depends(get_async_jobs),
     runtime_settings: Settings = Depends(get_runtime_settings),
+    runtime_gateway: RuntimeGateway | None = Depends(get_runtime_gateway),
     _: str = Depends(require_key),
 ) -> AsyncSubmitResponse:
     normalized_payload = normalize_check_request(payload, runtime_settings)
+    runtime_id = normalized_payload.runtime_id or runtime_settings.default_runtime_id
+    if runtime_gateway is not None:
+        runtime = runtime_gateway.require_runtime(runtime_id)
+        await runtime_gateway.wake_runtime(runtime)
     settings = getattr(request.app.state, "settings", runtime_settings)
     soft_limit = int(getattr(settings, "async_admission_queue_limit", 0) or 0)
     if soft_limit > 0:
@@ -181,7 +191,10 @@ async def get_async_metrics(
     if settings is not None and not bool(getattr(settings, "async_metrics_enabled", True)):
         raise HTTPException(status_code=404, detail="Async metrics endpoint is disabled")
 
-    metrics = await jobs.metrics()
+    runtime_id = None if getattr(settings, "gateway_enabled", False) else getattr(
+        settings, "runtime_id", None
+    )
+    metrics = await jobs.metrics(runtime_id=runtime_id)
     alert_max_age = int(getattr(settings, "async_alert_max_oldest_queued_age_sec", 60) or 0)
     if alert_max_age > 0 and metrics.oldest_queued_age_sec > alert_max_age:
         logger.bind(endpoint="api.async.metrics").warning(

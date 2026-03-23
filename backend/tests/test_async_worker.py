@@ -167,8 +167,18 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
         policy,
         circuit_breaker,
         warm_targets,
+        runtime_id,
     ) -> None:
-        _ = jobs, manager, task_timeout_sec, worker_retries, policy, circuit_breaker, warm_targets
+        _ = (
+            jobs,
+            manager,
+            task_timeout_sec,
+            worker_retries,
+            policy,
+            circuit_breaker,
+            warm_targets,
+            runtime_id,
+        )
         started.add(consumer_id)
         try:
             await asyncio.Event().wait()

@@ -106,6 +106,9 @@ export function HistorySidebar({
                       {item.code.length > 60 ? '...' : ''}
                     </p>
                     <div className="flex items-center gap-2">
+                      <p className="text-xs text-muted-foreground/80">
+                        {item.runtimeLabel}
+                      </p>
                       <p className="text-xs text-muted-foreground/60">
                         {formatTime(item.timestamp)}
                       </p>

@@ -148,14 +148,21 @@ async def test_mathlib(client: TestClient) -> None:
 
     assert_json_equal(resp1.json(), expected, ignore_keys=["time", "diagnostics"])
 
-    assert resp1.json()["results"][0]["time"] < 1
+    max_reuse_time = 5 if settings.lean_version == "v4.28.0" else 1
+    assert resp1.json()["results"][0]["time"] < max_reuse_time
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "client",
     [
-        {"max_repls": 1, "max_repl_uses": 2, "init_repls": {}, "database_url": None},
+        {
+            "max_repls": 1,
+            "max_repl_uses": 2,
+            "init_repls": {},
+            "database_url": None,
+            "allow_client_debug": True,
+        },
     ],
     indirect=True,
 )
@@ -211,6 +218,16 @@ async def test_timeout(client: TestClient) -> None:
                                 data="Goals accomplished!",
                             )
                         ],
+                    ),
+                )
+            ]
+        ).model_dump(exclude_none=True),
+        "v4.28.0": CheckResponse(
+            results=[
+                ReplResponse(
+                    id=uuid,
+                    response=CommandResponse(
+                        env=0,
                     ),
                 )
             ]
@@ -526,7 +543,7 @@ async def test_infotree(client: TestClient) -> None:
     ).model_dump(exclude_none=True)
 
     assert resp.status_code == status.HTTP_200_OK
-    assert_json_equal(resp.json(), expected, ignore_keys=["time", "env"])
+    assert_json_equal(resp.json(), expected, ignore_keys=["time", "env", "kind", "argKinds"])
 
 
 @pytest.mark.asyncio

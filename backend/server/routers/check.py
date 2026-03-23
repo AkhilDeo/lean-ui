@@ -14,6 +14,7 @@ from ..manager import Manager
 from ..prisma_client import prisma
 from ..request_policy import normalize_check_request
 from ..repl import Repl
+from ..runtime_gateway import RuntimeGateway
 from ..settings import Settings, settings as default_settings
 from ..split import split_snippet
 
@@ -26,11 +27,19 @@ def get_manager(request: Request) -> Manager:
     return cast(Manager, request.app.state.manager)
 
 
+def get_optional_manager(request: Request) -> Manager | None:
+    return cast(Manager | None, getattr(request.app.state, "manager", None))
+
+
 def get_runtime_settings(request: Request) -> Settings:
     cfg = getattr(request.app.state, "settings", None)
     if cfg is None:
         return default_settings
     return cast(Settings, cfg)
+
+
+def get_runtime_gateway(request: Request) -> RuntimeGateway | None:
+    return cast(RuntimeGateway | None, getattr(request.app.state, "runtime_gateway", None))
 
 
 def _shift_line(pos: Pos | None, offset: int) -> None:
@@ -70,11 +79,11 @@ def _apply_header_offset(response: ReplResponse, offset: int) -> None:
 
 
 def _log_body_response(repl: Repl, snippet_id: str, response: ReplResponse) -> None:
-    logger.opt(lazy=True).debug(
+    logger.debug(
         "[{}] Response for [bold magenta]{}[/bold magenta] body ->\n{}",
         repl.uuid.hex[:8],
         snippet_id,
-        lambda: json.dumps(response.model_dump(exclude_none=True), indent=2),
+        json.dumps(response.model_dump(exclude_none=True), indent=2),
     )
 
 
@@ -238,11 +247,33 @@ async def run_checks(
 async def check(
     request: CheckRequest,
     raw_request: Request,
-    manager: Manager = Depends(get_manager),
+    manager: Manager | None = Depends(get_optional_manager),
     runtime_settings: Settings = Depends(get_runtime_settings),
+    runtime_gateway: RuntimeGateway | None = Depends(get_runtime_gateway),
     _: str = Depends(require_key),
 ) -> CheckResponse:
     normalized_request = normalize_check_request(request, runtime_settings)
+
+    if runtime_settings.gateway_enabled:
+        if runtime_gateway is None:
+            raise HTTPException(status_code=503, detail="Runtime gateway is not configured")
+        runtime = runtime_gateway.require_runtime(normalized_request.runtime_id or "")
+        payload = normalized_request.model_dump(mode="json", exclude_none=True)
+        if await runtime_gateway.is_runtime_warm(runtime):
+            proxied = await runtime_gateway.proxy_sync_check(runtime, payload)
+            if proxied is not None:
+                return proxied
+        await runtime_gateway.wake_runtime(runtime)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Runtime {runtime.runtime_id} is cold and is starting up. "
+                "Retry asynchronously via /api/async/check."
+            ),
+        )
+
+    if manager is None:
+        raise HTTPException(status_code=503, detail="REPL manager is not configured")
 
     task = asyncio.create_task(
         run_checks(

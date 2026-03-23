@@ -112,7 +112,7 @@ Or from source with `pip install -e .`
 | `LEAN_SERVER_PORT`                    | `8000`        | Port number for the server                             |
 | `LEAN_SERVER_LOG_LEVEL`               | `INFO`        | Logging level (`DEBUG`, `INFO`, `ERROR`, etc.)         |
 | `LEAN_SERVER_ENVIRONMENT`             | `dev`         | Environment `dev` or `prod`                            |
-| `LEAN_SERVER_LEAN_VERSION`            | `v4.15.0`     | Lean version                                           |
+| `LEAN_SERVER_LEAN_VERSION`            | `v4.28.0`     | Lean version                                           |
 | `LEAN_SERVER_MAX_REPLS`               | CPU count - 1 | Maximum number of REPLs                                |
 | `LEAN_SERVER_MAX_REPL_USES`           | `-1`          | Maximum number of uses per REPL (-1 is no limit)       |
 | `LEAN_SERVER_MAX_REPL_MEM`            | `8G`          | Maximum memory limit for each REPL (Linux-only)        |
@@ -224,7 +224,7 @@ To release the client:
 
 To release the server:
 - bump the version in `compose-prod.yaml` and in Dockerfile
-- run the "Deploy to Google Cloud" action on Github
+- deploy the Railway gateway/runtime services using the env contract in `docs/DEPLOYMENT.md`
 - run the "Publish to Docker" action on Github (doesn't exist yet)
 
 If you change dependencies (uv.lock), make sure to generate `requirements.txt` again with:
@@ -249,4 +249,3 @@ You are free to use, modify, and distribute this software with proper attributio
       url={https://arxiv.org/abs/2504.21230}, 
 }
 ```
-

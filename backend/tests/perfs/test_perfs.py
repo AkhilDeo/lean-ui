@@ -7,19 +7,21 @@ from statistics import mean
 from typing import cast
 
 import pytest
-from asgi_lifespan import LifespanManager
-from datasets import load_dataset
-from httpx import ASGITransport, AsyncClient
 from kimina_client import CheckRequest, ReplResponse, Snippet
 from loguru import logger
 
-from server.main import app
 from server.settings import settings
 
 
 @pytest.mark.perfs
 @pytest.mark.asyncio  # TODO: Parametrize
 async def test_goedel(perf_rows: int, perf_shuffle: bool) -> None:
+    from asgi_lifespan import LifespanManager
+    from datasets import load_dataset
+    from httpx import ASGITransport, AsyncClient
+
+    from server.asgi import app
+
     ds = load_dataset(
         "Goedel-LM/Lean-workbook-proofs", split="train"
     )  # Goedel is on v4.9.0, some proofs aren't valid in later versions.

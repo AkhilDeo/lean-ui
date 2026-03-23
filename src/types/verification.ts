@@ -6,7 +6,18 @@ export interface VerificationResult {
   errors: string[];
   warnings: string[];
   timestamp: Date;
+  jobId?: string | null;
+  progressMessage?: string | null;
+  runtimeId: string;
+  runtimeLabel: string;
   leanVersion: string;
+}
+
+export interface RuntimeOption {
+  runtimeId: string;
+  displayName: string;
+  leanVersion: string;
+  isDefault: boolean;
 }
 
 export type SnippetOutcomeStatus =
@@ -17,6 +28,12 @@ export type SnippetOutcomeStatus =
   | 'timeout_error'
   | 'server_error';
 
+export type VerificationJobStatus =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed';
+
 export interface VerifyApiResponse {
   status: SnippetOutcomeStatus;
   passed: boolean;
@@ -24,4 +41,12 @@ export interface VerifyApiResponse {
   warnings?: string[];
   infos?: string[];
   time?: number;
+}
+
+export interface VerifyJobResponse {
+  jobId: string | null;
+  status: VerificationJobStatus;
+  runtimeId?: string | null;
+  result?: VerifyApiResponse | null;
+  error?: string | null;
 }

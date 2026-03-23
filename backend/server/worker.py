@@ -98,11 +98,13 @@ async def _record_manager_metrics(
     manager: Manager,
     queue_tier: AsyncQueueTier,
     warm_targets: dict[str, int],
+    runtime_id: str,
 ) -> None:
     stats = manager.drain_startup_stats()
     warm_repls = await manager.count_free_started_repls(set(warm_targets))
     await jobs.record_worker_metrics(
         queue_tier=queue_tier,
+        runtime_id=runtime_id,
         warm_repls=warm_repls,
         cold_starts=stats["cold_starts"],
         spawn_failures=stats["spawn_failures"],
@@ -116,6 +118,7 @@ async def _maybe_pause_for_circuit_breaker(
     manager: Manager,
     queue_tier: AsyncQueueTier,
     warm_targets: dict[str, int],
+    runtime_id: str,
 ) -> None:
     if breaker is None:
         return
@@ -128,7 +131,7 @@ async def _maybe_pause_for_circuit_breaker(
         remaining,
     )
     await manager.ensure_warm_repls(warm_targets, timeout=60.0)
-    await _record_manager_metrics(jobs, manager, queue_tier, warm_targets)
+    await _record_manager_metrics(jobs, manager, queue_tier, warm_targets, runtime_id)
     await asyncio.sleep(remaining)
 
 
@@ -140,11 +143,13 @@ async def process_task(
     consumer_id: int = 0,
     policy: AsyncWorkerPolicy | None = None,
     circuit_breaker: AsyncCircuitBreaker | None = None,
+    runtime_id: str | None = None,
 ) -> bool:
     effective_policy = policy or AsyncWorkerPolicy.from_settings(Settings())
     task = await jobs.dequeue_task(
         timeout_sec=task_timeout_sec,
         queue_tier=effective_policy.worker_queue_tier,
+        runtime_id=runtime_id,
     )
     if task is None:
         return False
@@ -220,6 +225,7 @@ async def process_task(
                         task.retry_count = attempt
                         await jobs.record_worker_metrics(
                             queue_tier=queue_tier,
+                            runtime_id=task.runtime_id,
                             exhausted_retries=1,
                             failure_reason=failure_reason,
                         )
@@ -232,6 +238,7 @@ async def process_task(
                     task.retry_count = attempt
                     await jobs.record_worker_metrics(
                         queue_tier=queue_tier,
+                        runtime_id=task.runtime_id,
                         retries=1,
                         failure_reason=failure_reason,
                     )
@@ -266,6 +273,7 @@ async def process_task(
                 task.retry_count = attempt - 1 if failure_reason is None else attempt
                 await jobs.record_worker_metrics(
                     queue_tier=queue_tier,
+                    runtime_id=task.runtime_id,
                     exhausted_retries=1 if failure_reason is not None else 0,
                     failure_reason=failure_reason,
                 )
@@ -303,6 +311,7 @@ async def process_task(
                         task.retry_count = attempt
                         await jobs.record_worker_metrics(
                             queue_tier=queue_tier,
+                            runtime_id=task.runtime_id,
                             exhausted_retries=1,
                             failure_reason=failure_reason,
                         )
@@ -315,6 +324,7 @@ async def process_task(
                     task.retry_count = attempt
                     await jobs.record_worker_metrics(
                         queue_tier=queue_tier,
+                        runtime_id=task.runtime_id,
                         retries=1,
                         failure_reason=failure_reason,
                     )
@@ -351,6 +361,7 @@ async def process_task(
                 task.retry_count = attempt - 1 if failure_reason is None else attempt
                 await jobs.record_worker_metrics(
                     queue_tier=queue_tier,
+                    runtime_id=task.runtime_id,
                     exhausted_retries=1 if failure_reason is not None else 0,
                     failure_reason=failure_reason,
                 )
@@ -379,6 +390,7 @@ async def _warm_pool_loop(
     manager: Manager,
     policy: AsyncWorkerPolicy,
     warm_targets: dict[str, int],
+    runtime_id: str,
 ) -> None:
     queue_tier = (
         policy.worker_queue_tier
@@ -389,7 +401,9 @@ async def _warm_pool_loop(
         try:
             if warm_targets:
                 await manager.ensure_warm_repls(warm_targets, timeout=60.0)
-            await _record_manager_metrics(jobs, manager, queue_tier, warm_targets)
+            await _record_manager_metrics(
+                jobs, manager, queue_tier, warm_targets, runtime_id
+            )
             await asyncio.sleep(2.0)
         except asyncio.CancelledError:
             raise
@@ -408,6 +422,7 @@ async def _consumer_loop(
     policy: AsyncWorkerPolicy,
     circuit_breaker: AsyncCircuitBreaker | None,
     warm_targets: dict[str, int],
+    runtime_id: str,
 ) -> None:
     queue_tier = (
         policy.worker_queue_tier
@@ -422,6 +437,7 @@ async def _consumer_loop(
                 manager=manager,
                 queue_tier=queue_tier,
                 warm_targets=warm_targets,
+                runtime_id=runtime_id,
             )
             did_work = await process_task(
                 jobs=jobs,
@@ -431,8 +447,11 @@ async def _consumer_loop(
                 consumer_id=consumer_id,
                 policy=policy,
                 circuit_breaker=circuit_breaker,
+                runtime_id=runtime_id,
             )
-            await _record_manager_metrics(jobs, manager, queue_tier, warm_targets)
+            await _record_manager_metrics(
+                jobs, manager, queue_tier, warm_targets, runtime_id
+            )
             if not did_work:
                 await asyncio.sleep(0.05)
         except asyncio.CancelledError:
@@ -447,16 +466,24 @@ async def _consumer_loop(
             await asyncio.sleep(0.25)
 
 
-async def run_worker(settings: Settings | None = None) -> None:
+async def run_worker(
+    settings: Settings | None = None,
+    *,
+    jobs: AsyncJobs | None = None,
+    manager: Manager | None = None,
+    manage_resources: bool = True,
+) -> None:
     cfg = settings or Settings()
     if not cfg.async_enabled:
         raise RuntimeError("Worker requires LEAN_SERVER_ASYNC_ENABLED=true")
 
-    jobs = await create_async_jobs(cfg)
+    owned_jobs = jobs is None
+    jobs = jobs or await create_async_jobs(cfg)
     recovered_tasks = await jobs.recover_running_tasks()
     if recovered_tasks:
         logger.warning("Recovered async tasks before worker start: {}", recovered_tasks)
-    manager = Manager(
+    owned_manager = manager is None
+    manager = manager or Manager(
         max_repls=cfg.max_repls,
         max_repl_uses=cfg.max_repl_uses,
         max_repl_mem=cfg.max_repl_mem,
@@ -492,6 +519,7 @@ async def run_worker(settings: Settings | None = None) -> None:
             manager=manager,
             policy=policy,
             warm_targets=warm_targets,
+            runtime_id=cfg.runtime_id,
         ),
         name="async-worker-warm-pool",
     )
@@ -506,6 +534,7 @@ async def run_worker(settings: Settings | None = None) -> None:
                 policy=policy,
                 circuit_breaker=circuit_breaker,
                 warm_targets=warm_targets,
+                runtime_id=cfg.runtime_id,
             ),
             name=f"async-worker-consumer-{i + 1}",
         )
@@ -522,13 +551,16 @@ async def run_worker(settings: Settings | None = None) -> None:
         for task in consumers:
             task.cancel()
         await asyncio.gather(*consumers, return_exceptions=True)
-        await manager.cleanup()
-        await jobs.close()
+        if manage_resources and owned_manager:
+            await manager.cleanup()
+        if manage_resources and owned_jobs:
+            await jobs.close()
 
 
 def main() -> None:
-    setup_logging()
-    asyncio.run(run_worker())
+    cfg = Settings()
+    setup_logging(cfg)
+    asyncio.run(run_worker(cfg))
 
 
 if __name__ == "__main__":
