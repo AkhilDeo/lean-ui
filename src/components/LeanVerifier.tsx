@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Play, Loader2, Code2, Sparkles } from 'lucide-react';
+import { Play, Loader2, Code2, Sparkles, ChevronDown } from 'lucide-react';
 import { generateRandomName } from '@/lib/nameGenerator';
 
 const DEFAULT_CODE = `-- Welcome to Lean 4.28 Verifier!
@@ -397,51 +397,56 @@ export function LeanVerifier() {
       </div>
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        <header className="h-16 border-b border-border flex items-center justify-between px-6 bg-card">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
-              <Code2 className="h-5 w-5 text-primary-foreground" />
+        <header className="border-b border-border bg-card px-6 py-3">
+          <div className="flex min-h-10 flex-wrap items-center gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center">
+                <Code2 className="h-5 w-5 text-primary-foreground" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-lg font-bold">Lean Runtime Gateway</h1>
+                <p className="text-xs text-muted-foreground">Async-first verification across Lean 4 runtimes</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-lg font-bold">Lean Runtime Gateway</h1>
-              <p className="text-xs text-muted-foreground">Async-first verification across Lean 4 runtimes</p>
+            <div className="ml-auto flex flex-1 flex-wrap items-center justify-end gap-3">
+              <div className="relative min-w-[12rem] flex-1 basis-[12rem] sm:max-w-56 sm:flex-none">
+                <select
+                  value={selectedRuntimeId}
+                  onChange={(e) => setSelectedRuntimeId(e.target.value)}
+                  className="h-9 w-full appearance-none rounded-md border border-input bg-background/70 pl-3 pr-10 text-sm leading-none shadow-xs outline-none transition-[border-color,box-shadow,background-color] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {runtimes.map((runtime) => (
+                    <option key={runtime.runtimeId} value={runtime.runtimeId}>
+                      {runtime.displayName}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              </div>
+              <Input
+                placeholder="Verification title (optional)"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className="h-9 min-w-[14rem] flex-1 basis-64 bg-background/70"
+              />
+              <Button
+                onClick={handleVerify}
+                disabled={isVerifying || !code.trim() || !selectedRuntime}
+                className="h-9 w-[9.5rem] justify-center gap-2"
+              >
+                {isVerifying ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-4 w-4" />
+                    Verify
+                  </>
+                )}
+              </Button>
             </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <select
-              value={selectedRuntimeId}
-              onChange={(e) => setSelectedRuntimeId(e.target.value)}
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
-            >
-              {runtimes.map((runtime) => (
-                <option key={runtime.runtimeId} value={runtime.runtimeId}>
-                  {runtime.displayName}
-                </option>
-              ))}
-            </select>
-            <Input
-              placeholder="Verification title (optional)"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="w-64"
-            />
-            <Button
-              onClick={handleVerify}
-              disabled={isVerifying || !code.trim() || !selectedRuntime}
-              className="gap-2"
-            >
-              {isVerifying ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Running...
-                </>
-              ) : (
-                <>
-                  <Play className="h-4 w-4" />
-                  Verify
-                </>
-              )}
-            </Button>
           </div>
         </header>
 
