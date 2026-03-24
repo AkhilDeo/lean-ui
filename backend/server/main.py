@@ -23,13 +23,14 @@ from .runtime_scaler import RuntimeIdleScaler
 from .settings import Environment, Settings
 from .worker import run_worker
 
+SYNC_READY_HEADER = "import Mathlib"
+
 
 def no_sort(self: GenerateJsonSchema, value: Any, parent_key: Any = None) -> Any:
     return value
 
 
 setattr(GenerateJsonSchema, "sort", no_sort)
-
 
 def create_app(settings: Settings) -> FastAPI:
     @asynccontextmanager
@@ -60,9 +61,27 @@ def create_app(settings: Settings) -> FastAPI:
         validate_runtime_configuration(settings, runtime_registry)
         app.state.settings = settings
         app.state.runtime_registry = runtime_registry
+        app.state.runtime_ready_event = asyncio.Event()
+        app.state.runtime_ready_reason = None
+
+        def set_runtime_ready(*, ready: bool, reason: str | None) -> None:
+            if ready:
+                app.state.runtime_ready_event.set()
+            else:
+                app.state.runtime_ready_event.clear()
+            app.state.runtime_ready_reason = reason
+
+        if settings.gateway_enabled:
+            set_runtime_ready(ready=True, reason=None)
+        else:
+            set_runtime_ready(
+                ready=False,
+                reason=f"Runtime {settings.runtime_id} verifier warmup is still in progress.",
+            )
         app.state.runtime_gateway = (
             RuntimeGateway(settings, runtime_registry) if settings.gateway_enabled else None
         )
+        runtime_readiness_task: asyncio.Task[None] | None = None
 
         if settings.async_enabled:
             app.state.async_jobs = await create_async_jobs(settings)
@@ -85,6 +104,28 @@ def create_app(settings: Settings) -> FastAPI:
             )
             app.state.manager = manager
 
+            async def _warm_runtime_readiness() -> None:
+                try:
+                    logger.info(
+                        "Starting runtime readiness warmup for {} with header '{}'",
+                        settings.runtime_id,
+                        SYNC_READY_HEADER,
+                    )
+                    await manager.ensure_warm_repls({SYNC_READY_HEADER: 1}, timeout=60.0)
+                    set_runtime_ready(ready=True, reason=None)
+                    logger.info(
+                        "Runtime readiness warmup completed for {}",
+                        settings.runtime_id,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    set_runtime_ready(
+                        ready=False,
+                        reason=f"Runtime {settings.runtime_id} verifier warmup failed: {e}",
+                    )
+                    logger.exception("Runtime readiness warmup failed: {}", e)
+
             async def _init_repls_background() -> None:
                 try:
                     logger.info("Starting background REPL initialization...")
@@ -93,6 +134,10 @@ def create_app(settings: Settings) -> FastAPI:
                 except Exception as e:
                     logger.exception("Failed to initialize REPLs in background: %s", e)
 
+            runtime_readiness_task = asyncio.create_task(
+                _warm_runtime_readiness(),
+                name="runtime-readiness-warmup",
+            )
             asyncio.create_task(_init_repls_background())
 
             if settings.async_enabled and settings.embedded_worker_enabled:
@@ -141,6 +186,10 @@ def create_app(settings: Settings) -> FastAPI:
         runtime_scaler = getattr(app.state, "runtime_scaler", None)
         if runtime_scaler is not None:
             await runtime_scaler.stop()
+
+        if runtime_readiness_task is not None:
+            runtime_readiness_task.cancel()
+            await asyncio.gather(runtime_readiness_task, return_exceptions=True)
 
         embedded_worker_task = getattr(app.state, "embedded_worker_task", None)
         if embedded_worker_task is not None:

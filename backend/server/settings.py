@@ -96,7 +96,6 @@ class Settings(BaseSettings):
     # Request policy hardening
     request_timeout_max_sec: int = 60
     allow_client_debug: bool = False
-    allow_client_reuse_override: bool = False
     allow_client_timeout_override: bool = True
 
     # Host-level memory guard for REPL creation.

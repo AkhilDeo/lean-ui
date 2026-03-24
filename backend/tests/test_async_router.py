@@ -208,7 +208,7 @@ async def test_async_submit_policy_normalizes_timeout_debug_and_reuse() -> None:
             assert task is not None
             assert task.timeout == float(app.state.settings.request_timeout_max_sec)
             assert task.debug is False
-            assert task.reuse is True
+            assert task.reuse is False
 
 
 @pytest.mark.asyncio

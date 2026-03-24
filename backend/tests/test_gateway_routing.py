@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+
+import httpx
+import pytest
 from fastapi.testclient import TestClient
+from asgi_lifespan import LifespanManager
+from httpx import ASGITransport, AsyncClient
 from kimina_client.models import CheckResponse, ReplResponse
 
 from server.main import create_app
@@ -111,3 +117,114 @@ def test_gateway_sync_check_wakes_cold_runtime(monkeypatch) -> None:  # type: ig
         )
         assert response.status_code == 503
         assert calls == ["v4.9.0"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_runtime_warm_check_requires_ready_health(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _seed_gateway_runtime_env(monkeypatch)
+    app = create_app(_gateway_app())
+
+    async with LifespanManager(app):
+        gateway = app.state.runtime_gateway
+        runtime = gateway.require_runtime("v4.27.0")
+
+        async def fake_get(*args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = args, kwargs
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "mode": "runtime",
+                    "runtime_id": runtime.runtime_id,
+                    "ready": False,
+                    "ready_reason": "warming verifier",
+                },
+            )
+
+        monkeypatch.setattr(gateway._http, "get", fake_get)
+        assert await gateway.is_runtime_warm(runtime) is False
+
+
+@pytest.mark.asyncio
+async def test_gateway_runtime_warm_check_accepts_ready_health(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _seed_gateway_runtime_env(monkeypatch)
+    app = create_app(_gateway_app())
+
+    async with LifespanManager(app):
+        gateway = app.state.runtime_gateway
+        runtime = gateway.require_runtime("v4.27.0")
+
+        async def fake_get(*args, **kwargs):  # type: ignore[no-untyped-def]
+            _ = args, kwargs
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "mode": "runtime",
+                    "runtime_id": runtime.runtime_id,
+                    "ready": True,
+                    "ready_reason": None,
+                },
+            )
+
+        monkeypatch.setattr(gateway._http, "get", fake_get)
+        assert await gateway.is_runtime_warm(runtime) is True
+
+
+def _runtime_app() -> Settings:
+    settings = Settings(_env_file=None)
+    settings.environment = Environment.prod
+    settings.api_key = "test-key"
+    settings.database_url = None
+    settings.async_enabled = False
+    settings.gateway_enabled = False
+    settings.runtime_id = "v4.27.0"
+    settings.lean_version = "v4.27.0"
+    settings.max_repls = 1
+    settings.max_repl_uses = 1
+    settings.init_repls = {}
+    return settings
+
+
+@pytest.mark.asyncio
+async def test_runtime_health_reports_readiness_transition(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    warmup_started = asyncio.Event()
+    release_warmup = asyncio.Event()
+
+    async def fake_ensure_warm_repls(self, targets, *, timeout=60.0):  # type: ignore[no-untyped-def]
+        assert targets == {"import Mathlib": 1}
+        assert timeout == 60.0
+        warmup_started.set()
+        await release_warmup.wait()
+
+    monkeypatch.setattr("server.manager.Manager.ensure_warm_repls", fake_ensure_warm_repls)
+    app = create_app(_runtime_app())
+
+    async with LifespanManager(app):
+        await asyncio.wait_for(warmup_started.wait(), timeout=1.0)
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            before = await client.get("/health")
+            assert before.status_code == 200
+            assert before.json() == {
+                "status": "ok",
+                "mode": "runtime",
+                "runtime_id": "v4.27.0",
+                "ready": False,
+                "ready_reason": "Runtime v4.27.0 verifier warmup is still in progress.",
+            }
+
+            release_warmup.set()
+            await asyncio.wait_for(app.state.runtime_ready_event.wait(), timeout=1.0)
+
+            after = await client.get("/health")
+            assert after.status_code == 200
+            assert after.json() == {
+                "status": "ok",
+                "mode": "runtime",
+                "runtime_id": "v4.27.0",
+                "ready": True,
+                "ready_reason": None,
+            }

@@ -14,7 +14,6 @@ def test_normalize_request_policy_applies_server_locks() -> None:
     settings.request_timeout_max_sec = 60
     settings.allow_client_timeout_override = True
     settings.allow_client_debug = False
-    settings.allow_client_reuse_override = False
 
     policy = normalize_request_policy(
         timeout=999,
@@ -24,7 +23,7 @@ def test_normalize_request_policy_applies_server_locks() -> None:
     )
     assert policy.timeout == 60
     assert policy.debug is False
-    assert policy.reuse is True
+    assert policy.reuse is False
 
 
 def test_normalize_request_policy_can_disable_timeout_override() -> None:
@@ -32,7 +31,6 @@ def test_normalize_request_policy_can_disable_timeout_override() -> None:
     settings.request_timeout_max_sec = 45
     settings.allow_client_timeout_override = False
     settings.allow_client_debug = True
-    settings.allow_client_reuse_override = True
 
     policy = normalize_request_policy(
         timeout=3,
@@ -101,7 +99,7 @@ def test_api_check_applies_normalized_policy(
     assert resp.status_code == 200
     assert captured["timeout"] == 60.0
     assert captured["debug"] is False
-    assert captured["reuse"] is True
+    assert captured["reuse"] is False
     body = resp.json()
     assert body["results"][0]["status"] == "valid"
     assert body["results"][0]["passed"] is True
@@ -129,4 +127,4 @@ def test_api_verify_applies_normalized_policy(
     assert resp.status_code == 200
     assert captured["timeout"] == 60.0
     assert captured["debug"] is False
-    assert captured["reuse"] is True
+    assert captured["reuse"] is False

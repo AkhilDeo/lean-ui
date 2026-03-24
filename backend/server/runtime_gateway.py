@@ -85,7 +85,13 @@ class RuntimeGateway:
             )
         except Exception:
             return False
-        return response.is_success
+        if not response.is_success:
+            return False
+        try:
+            payload = response.json()
+        except Exception:
+            return False
+        return payload.get("ready") is True
 
     async def wake_runtime(self, runtime: RuntimeDescriptor) -> None:
         if self._railway is None:

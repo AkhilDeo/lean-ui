@@ -29,14 +29,13 @@ def normalize_request_policy(
         effective_timeout = max_timeout
 
     effective_debug = debug if settings.allow_client_debug else False
-    effective_reuse = reuse if settings.allow_client_reuse_override else True
     effective_runtime_id = (
         settings.default_runtime_id if settings.gateway_enabled else settings.runtime_id
     )
     return NormalizedRequestPolicy(
         timeout=effective_timeout,
         debug=effective_debug,
-        reuse=effective_reuse,
+        reuse=reuse,
         runtime_id=effective_runtime_id,
     )
 
