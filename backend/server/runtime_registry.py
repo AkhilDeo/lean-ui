@@ -30,11 +30,6 @@ class RuntimeRegistryResponse(BaseModel):
 _SEEDED_RUNTIME_IDS = (
     "v4.9.0",
     "v4.15.0",
-    "v4.19.0",
-    "v4.21.0",
-    "v4.26.0",
-    "v4.27.0",
-    "v4.28.0",
 )
 
 

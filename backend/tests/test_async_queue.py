@@ -20,7 +20,7 @@ async def test_in_memory_queue_roundtrip() -> None:
         task_id="task-1",
         index=0,
         snippet=Snippet(id="snippet-1", code="#check Nat"),
-        runtime_id="v4.28.0",
+        runtime_id="v4.15.0",
         queue_tier=AsyncQueueTier.light,
         timeout=30.0,
         debug=False,

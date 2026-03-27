@@ -25,7 +25,8 @@ import {
 import { Play, Loader2, Code2, Sparkles, ChevronDown } from 'lucide-react';
 import { generateRandomName } from '@/lib/nameGenerator';
 
-const DEFAULT_CODE = `-- Welcome to Lean 4.28 Verifier!
+const DEFAULT_CODE = `-- Welcome to Lean Verifier!
+-- Supported runtimes: Lean 4.15.0 and Lean 4.9.0.
 -- Pick a Lean runtime, write your code, and verify it.
 
 theorem hello_world : 1 + 1 = 2 := by
@@ -73,7 +74,7 @@ export function LeanVerifier() {
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [isResizing, setIsResizing] = useState(false);
   const [runtimes, setRuntimes] = useState<RuntimeOption[]>([]);
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState('v4.28.0');
+  const [selectedRuntimeId, setSelectedRuntimeId] = useState('v4.15.0');
   const resizeRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef(false);
 

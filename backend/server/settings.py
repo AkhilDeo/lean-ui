@@ -27,9 +27,9 @@ class Settings(BaseSettings):
 
     environment: Environment = Environment.dev
 
-    lean_version: str = "v4.28.0"
-    runtime_id: str = "v4.28.0"
-    default_runtime_id: str = "v4.28.0"
+    lean_version: str = "v4.15.0"
+    runtime_id: str = "v4.15.0"
+    default_runtime_id: str = "v4.15.0"
     gateway_enabled: bool = False
     embedded_worker_enabled: bool = False
     gateway_sync_proxy_timeout_sec: int = 3

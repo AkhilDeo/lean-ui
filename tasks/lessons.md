@@ -1,0 +1,88 @@
+# Lessons
+
+Capture a new entry after every user correction.
+
+## Entry Template
+- Date:
+- Correction received:
+- Root cause:
+- New preventive rule:
+- Where applied:
+
+## Entries
+- Add newest entries at the top.
+- Date: 2026-03-27
+- Correction received: Drop every Lean runtime except `v4.15.0` and `v4.9.0`; do not keep newer versions in the supported product/runtime contract.
+- Root cause: I was still carrying forward the repo's earlier multi-runtime expansion and treating the seeded runtime list as product intent instead of re-scoping the system to the two versions the user actually wants.
+- New preventive rule: When the user narrows supported runtime versions, trim the full contract end-to-end: seeded registry, defaults, picker options, tests, docs, and deployment wiring, not just the visible UI list.
+- Where applied: `tasks/lessons.md`, the runtime registry/default updates, the frontend runtime picker, and the deployment/test contract for Lean 4.15.0 plus 4.9.0 only.
+- Date: 2026-03-23
+- Correction received: The suspected rapid version switching was a backend runtime-readiness issue, not a frontend runtime-picker/UI-state bug.
+- Root cause: I anchored too early on the visible runtime labels and REPL reuse symptoms and framed the readiness problem as UI thrash before validating how the gateway decided a runtime was actually warm.
+- New preventive rule: When a reported state transition seems implausibly fast, verify the backend readiness and liveness gates before attributing the behavior to frontend state or rendering.
+- Where applied: `tasks/lessons.md`, the runtime readiness gating fix, and the backend warm-health investigation for Lean runtimes.
+- Date: 2026-03-23
+- Correction received: Do not add macOS fallbacks, alternate launch modes, or defensive runtime branches; fix the single compiled REPL execution path at the root.
+- Root cause: I responded to the local broken REPL binary by proposing an alternate `lean --run` execution mode instead of keeping scope on the canonical compiled executable and fixing the underlying build or artifact issue.
+- New preventive rule: When the user rejects compatibility layers or fallback execution paths, keep one canonical runtime path and debug the real artifact or bootstrap failure directly instead of introducing alternate launch logic.
+- Where applied: `tasks/lessons.md`, the Lean 4.28 REPL rebuild/debug plan, and the current compiled-binary verification work.
+- Date: 2026-03-22
+- Correction received: When you can access the deployment CLIs, do not stop at repo changes; set the production env vars yourself, redeploy, test live, then commit and push.
+- Root cause: I treated an initial Vercel authorization failure as a blocker instead of continuing to resolve the correct scope/project and finishing the live deployment workflow.
+- New preventive rule: For deploy-capable repos, exhaust the available CLI and platform access paths before declaring deployment/env updates blocked; if the user asked for implementation, carry the fix through live env configuration, redeploy, production validation, commit, and push.
+- Where applied: `tasks/lessons.md`, the Vercel/Railway auth-forwarding fix, and this deployment pass.
+- Date: 2026-03-12
+- Correction received: Do not ship `tasks/todo.md`; remove it and keep the correction log in `tasks/lesson.md`.
+- Root cause: I carried forward the repo's older task-tracking pattern into the release commit instead of following the corrected file layout the user wanted.
+- New preventive rule: For this repo, do not add or keep `tasks/todo.md`; record corrections in `tasks/lesson.md` instead.
+- Where applied: `tasks/todo.md`, `tasks/lessons.md`, `tasks/lesson.md`, and this production release pass.
+- Date: 2026-03-12
+- Correction received: Ignore transient validation artifacts like `.coverage` and `backend/outputs/` before committing release work instead of leaving them as untracked noise in the ship path.
+- Root cause: I treated local verification byproducts as harmless leftovers and did not immediately fold repo hygiene into the release workflow.
+- New preventive rule: Before commit/push/deploy work in this repo, add any new transient validation artifacts to `.gitignore` and keep them out of release commits.
+- Where applied: `.gitignore`, `tasks/todo.md`, and this explicit outcome contract release pass.
+- Date: 2026-03-12
+- Correction received: When implementation is complete, finish the release path by committing, pushing, and then rerunning the authenticated production async repro instead of stopping at local/prod verification.
+- Root cause: I treated successful live validation as a sufficient stopping point and did not immediately carry the fix through the requested VCS handoff.
+- New preventive rule: For explicit implementation requests in this repo, treat the task as incomplete until the intended code is committed, pushed, and the live authenticated verification is rerun on the pushed state.
+- Where applied: `tasks/todo.md`, this single-runtime async REPL regression fix, and the final production verification loop.
+- Date: 2026-03-12
+- Correction received: Keep the Lean verifier on one simple Mathlib environment only; remove alternate Lean versions and `formalconjectures` complexity from the active debug scope.
+- Root cause: I allowed prior multi-environment rollout context to remain mentally coupled to the current async regression instead of immediately collapsing scope to the single supported Lean runtime.
+- New preventive rule: When debugging verifier/runtime regressions after the user re-scopes to one Lean environment, remove multi-version and alternate-project assumptions from the active plan, config changes, and verification steps.
+- Where applied: `tasks/todo.md`, the async REPL regression fix, Docker/build config, and production verification scope.
+- Date: 2026-03-12
+- Correction received: When rolling back the multi-environment work, preserve the separate Railway throughput changes that are already being deployed instead of reverting Railway indiscriminately.
+- Root cause: I initially framed the rollback as a broad return to the pre-rollout state and did not explicitly separate multi-environment routing changes from the independent async-capacity tuning work.
+- New preventive rule: When reverting a feature that overlaps with active infra work, identify and preserve orthogonal production-tuning changes before applying repo or deploy rollbacks.
+- Where applied: `tasks/todo.md`, the single-environment rollback plan, and the targeted Railway cleanup for `lean-ui`.
+- Date: 2026-03-12
+- Correction received: Push the full worktree and take the feature all the way through commit, push, Railway deploy, and production verification instead of stopping at local implementation.
+- Root cause: I treated repository implementation and local validation as a sufficient handoff point even though the explicit request required finishing the release path on the live deployment.
+- New preventive rule: When the user asks to push and deploy, treat local implementation as incomplete until the changes are committed, pushed, deployed, and production-checked.
+- Where applied: `tasks/todo.md`, this multi-environment gateway rollout, and the Railway deploy/debug loop.
+- Date: 2026-03-11
+- Correction received: Scope the rich `sorry` details work to the verification microservice only, not downstream gateway/client/prover/UI consumers.
+- Root cause: I treated the broader contract discussion as an end-to-end implementation candidate instead of locking scope to the explicitly corrected subsystem.
+- New preventive rule: When a user narrows scope after exploratory planning, update the implementation target immediately and avoid carrying speculative downstream changes into the active task.
+- Where applied: `tasks/todo.md`, the rich `sorry` details implementation plan, and this execution pass.
+- Date: 2026-03-09
+- Correction received: Do not stop after blocked or partial rounds; continue iterating until at least 10 valid production loops have completed.
+- Root cause: I treated earlier blocked deploys and incomplete iteration counts as acceptable pause points instead of resuming the commit/push/deploy benchmark loop immediately.
+- New preventive rule: For this throughput initiative, keep running autonomous production iterations until at least 10 valid loops are recorded, unless an explicit blocker is documented with proof.
+- Where applied: `tasks/todo.md`, the current async recovery iteration, and the remaining production throughput loop.
+- Date: 2026-03-09
+- Correction received: Throughput work must run as an autonomous autoresearch loop with repeated web research, commit/push/deploy validation, and revert-on-regression behavior instead of a one-pass optimization sweep.
+- Root cause: I treated research as a front-loaded phase and did not lock the workflow around iterative deployed experiments on `main`.
+- New preventive rule: For production performance initiatives on this repo, structure the work as repeated research -> smallest change -> local verification -> commit/push -> Railway deploy -> production benchmark -> keep or revert, and record every iteration.
+- Where applied: `tasks/todo.md`, backend throughput experiment loop design, iteration artifact plan, and all subsequent backend async/sync tuning work.
+- Date: 2026-03-02
+- Correction received: Railway production-tuning scripts are temporary ops tooling and should not be treated as permanent checked-in product code by default.
+- Root cause: I optimized for rapid operability and reuse, but did not explicitly classify the scripts as ephemeral tooling in task tracking.
+- New preventive rule: For infra-tuning helpers, default to "temporary local ops artifact" unless the user explicitly asks for long-term repository ownership.
+- Where applied: `backend/scripts/railway_tune_prod_capacity.py`, `backend/scripts/check_railway_state.py`, `backend/scripts/validate_async_env.py`, execution/report notes for this recovery run.
+- Date: 2026-03-02
+- Correction received: Deliver full implementation now, including async-first reliability validation, revised sync p99 target (5s), and production Railway env-tuning support.
+- Root cause: Initial responses over-indexed on planning/report structure before complete executable tooling.
+- New preventive rule: For explicit "IMPLEMENT THIS PLAN" requests, immediately build runnable scripts/tests and only treat unavailable external data as blockers.
+- Where applied: `backend/scripts/loadtest/loadtest_lean_server.py`, `backend/scripts/verify_async_redis_health.py`, `backend/scripts/railway_tune_prod_capacity.py`, `backend/tests/test_loadtest_script.py`, `tasks/todo.md`.

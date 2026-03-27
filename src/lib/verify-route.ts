@@ -7,6 +7,12 @@ export interface VerifyRouteConfig {
   apiKey: string;
   hasExplicitServerUrl: boolean;
   isProduction: boolean;
+  syncTimeoutMs?: number;
+  asyncSubmitTimeoutMs?: number;
+  pollTimeoutMs?: number;
+  warmupRetryWindowMs?: number;
+  warmupRetryDelayMs?: number;
+  warmupRetryMaxAttempts?: number;
 }
 
 export interface VerifyRouteResponse {
@@ -38,15 +44,63 @@ interface BackendRuntimeRegistryResponse {
   runtimes: BackendRuntimeDescriptor[];
 }
 
+interface SyncCheckSuccess {
+  kind: 'success';
+  payload: AdaptVerificationPayload;
+}
+
+interface SyncCheckHttpError {
+  kind: 'http_error';
+  status: number;
+  errorText: string;
+}
+
+interface SyncCheckNetworkError {
+  kind: 'network_error';
+  errorMessage: string;
+}
+
+type SyncCheckResult = SyncCheckSuccess | SyncCheckHttpError | SyncCheckNetworkError;
+
+interface AsyncSubmitSuccess {
+  kind: 'success';
+  payload: BackendAsyncSubmitResponse;
+}
+
+interface AsyncSubmitHttpError {
+  kind: 'http_error';
+  status: number;
+  errorText: string;
+}
+
+interface AsyncSubmitNetworkError {
+  kind: 'network_error';
+  errorMessage: string;
+}
+
+type AsyncSubmitResult = AsyncSubmitSuccess | AsyncSubmitHttpError | AsyncSubmitNetworkError;
+
 const KIMINA_LEAN_SERVER_URL = process.env.KIMINA_SERVER_URL || 'http://localhost:10000';
 const KIMINA_SERVER_API_KEY = process.env.KIMINA_SERVER_API_KEY?.trim() ?? '';
 const NODE_ENV = process.env.NODE_ENV;
+const DEFAULT_SYNC_TIMEOUT_MS = 2500;
+const DEFAULT_ASYNC_SUBMIT_TIMEOUT_MS = 10000;
+const DEFAULT_POLL_TIMEOUT_MS = 5000;
+const DEFAULT_WARMUP_RETRY_WINDOW_MS = 8000;
+const DEFAULT_WARMUP_RETRY_DELAY_MS = 750;
+const RUNTIME_WARMING_MESSAGE =
+  'Verification server is waking the selected runtime. Please try again in a few seconds.';
 
 const DEFAULT_ROUTE_CONFIG: VerifyRouteConfig = {
   backendUrl: KIMINA_LEAN_SERVER_URL,
   apiKey: KIMINA_SERVER_API_KEY,
   hasExplicitServerUrl: Boolean(process.env.KIMINA_SERVER_URL),
   isProduction: NODE_ENV === 'production',
+  syncTimeoutMs: DEFAULT_SYNC_TIMEOUT_MS,
+  asyncSubmitTimeoutMs: DEFAULT_ASYNC_SUBMIT_TIMEOUT_MS,
+  pollTimeoutMs: DEFAULT_POLL_TIMEOUT_MS,
+  warmupRetryWindowMs: DEFAULT_WARMUP_RETRY_WINDOW_MS,
+  warmupRetryDelayMs: DEFAULT_WARMUP_RETRY_DELAY_MS,
 };
 
 function normalizeBackendUrl(url: string): string {
@@ -84,6 +138,10 @@ function buildConfigErrorResponse(error: string): VerifyRouteResponse {
   };
 }
 
+function buildWarmupErrorResponse(): VerifyRouteResponse {
+  return buildConfigErrorResponse(RUNTIME_WARMING_MESSAGE);
+}
+
 function buildGenericErrorMessage(error: unknown, backendUrl: string): string {
   if (error instanceof Error) {
     if (error.name === 'AbortError') {
@@ -95,6 +153,164 @@ function buildGenericErrorMessage(error: unknown, backendUrl: string): string {
     return error.message;
   }
   return 'Unknown verification error occurred.';
+}
+
+function normalizeErrorText(errorText: string): string {
+  const trimmed = errorText.trim();
+  if (!trimmed) {
+    return 'Unknown server error';
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as { detail?: unknown; error?: unknown; message?: unknown };
+    if (typeof parsed.detail === 'string' && parsed.detail.trim()) {
+      return parsed.detail.trim();
+    }
+    if (typeof parsed.error === 'string' && parsed.error.trim()) {
+      return parsed.error.trim();
+    }
+    if (typeof parsed.message === 'string' && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+  } catch {
+    // Fall back to raw upstream body when the payload is not JSON.
+  }
+
+  return trimmed;
+}
+
+function isGatewayColdStartError(status: number, errorText: string): boolean {
+  const normalized = normalizeErrorText(errorText);
+  return (
+    status === 503 &&
+    normalized.includes('is cold and is starting up') &&
+    normalized.includes('/api/async/check')
+  );
+}
+
+function isAsyncQueueDisabledError(status: number, errorText: string): boolean {
+  return (
+    status === 503 &&
+    normalizeErrorText(errorText).includes('Async queue API is not enabled on this service')
+  );
+}
+
+function buildUpstreamHttpError(prefix: string, status: number, errorText: string): string {
+  return `${prefix}: ${status} - ${normalizeErrorText(errorText)}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runSyncCheck(
+  backendUrl: string,
+  headers: Record<string, string>,
+  payload: object,
+  timeoutMs: number
+): Promise<SyncCheckResult> {
+  try {
+    const response = await fetch(`${backendUrl}/api/check`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (response.ok) {
+      return {
+        kind: 'success',
+        payload: (await response.json()) as AdaptVerificationPayload,
+      };
+    }
+
+    return {
+      kind: 'http_error',
+      status: response.status,
+      errorText: await response.text(),
+    };
+  } catch (error) {
+    return {
+      kind: 'network_error',
+      errorMessage: buildGenericErrorMessage(error, backendUrl),
+    };
+  }
+}
+
+async function runAsyncSubmit(
+  backendUrl: string,
+  headers: Record<string, string>,
+  payload: object,
+  timeoutMs: number
+): Promise<AsyncSubmitResult> {
+  try {
+    const response = await fetch(`${backendUrl}/api/async/check`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (response.ok) {
+      return {
+        kind: 'success',
+        payload: (await response.json()) as BackendAsyncSubmitResponse,
+      };
+    }
+
+    return {
+      kind: 'http_error',
+      status: response.status,
+      errorText: await response.text(),
+    };
+  } catch (error) {
+    return {
+      kind: 'network_error',
+      errorMessage: buildGenericErrorMessage(error, backendUrl),
+    };
+  }
+}
+
+async function retrySyncUntilWarm(
+  backendUrl: string,
+  headers: Record<string, string>,
+  payload: object,
+  config: VerifyRouteConfig
+): Promise<SyncCheckResult | 'warmup_timeout'> {
+  const deadline = Date.now() + (config.warmupRetryWindowMs ?? DEFAULT_WARMUP_RETRY_WINDOW_MS);
+  const delayMs = config.warmupRetryDelayMs ?? DEFAULT_WARMUP_RETRY_DELAY_MS;
+  const maxAttempts = config.warmupRetryMaxAttempts ?? Number.POSITIVE_INFINITY;
+  let attemptCount = 0;
+
+  while (Date.now() <= deadline && attemptCount < maxAttempts) {
+    attemptCount += 1;
+    const result = await runSyncCheck(
+      backendUrl,
+      headers,
+      payload,
+      config.syncTimeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS
+    );
+
+    if (result.kind === 'success') {
+      return result;
+    }
+
+    if (result.kind === 'network_error') {
+      return result;
+    }
+
+    if (!isGatewayColdStartError(result.status, result.errorText)) {
+      return result;
+    }
+
+    if (Date.now() >= deadline || attemptCount >= maxAttempts) {
+      break;
+    }
+
+    await sleep(Math.min(delayMs, Math.max(deadline - Date.now(), 0)));
+  }
+
+  return 'warmup_timeout';
 }
 
 function validateServerConfig(config: VerifyRouteConfig): VerifyRouteResponse | null {
@@ -151,44 +367,84 @@ export async function handleVerifyPost(
       reuse: false,
     };
     const headers = buildBackendHeaders(config.apiKey);
+    const syncResult = await runSyncCheck(
+      backendUrl,
+      headers,
+      payload,
+      config.syncTimeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS
+    );
 
-    try {
-      const syncResponse = await fetch(`${backendUrl}/api/check`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(2500),
-      });
-      if (syncResponse.ok) {
+    if (syncResult.kind === 'success') {
+      return {
+        body: {
+          jobId: null,
+          status: 'completed',
+          runtimeId,
+          result: adaptVerificationResponse(syncResult.payload),
+        },
+        status: 200,
+      };
+    }
+
+    if (syncResult.kind === 'network_error') {
+      return buildConfigErrorResponse(syncResult.errorMessage);
+    }
+
+    if (!isGatewayColdStartError(syncResult.status, syncResult.errorText)) {
+      return buildConfigErrorResponse(
+        buildUpstreamHttpError('Sync verification failed', syncResult.status, syncResult.errorText)
+      );
+    }
+
+    const submitResult = await runAsyncSubmit(
+      backendUrl,
+      headers,
+      payload,
+      config.asyncSubmitTimeoutMs ?? DEFAULT_ASYNC_SUBMIT_TIMEOUT_MS
+    );
+
+    if (submitResult.kind === 'network_error') {
+      return buildConfigErrorResponse(submitResult.errorMessage);
+    }
+
+    if (
+      submitResult.kind === 'http_error' &&
+      isAsyncQueueDisabledError(submitResult.status, submitResult.errorText)
+    ) {
+      const warmupResult = await retrySyncUntilWarm(backendUrl, headers, payload, config);
+      if (warmupResult === 'warmup_timeout') {
+        return buildWarmupErrorResponse();
+      }
+      if (warmupResult.kind === 'success') {
         return {
           body: {
             jobId: null,
             status: 'completed',
             runtimeId,
-            result: adaptVerificationResponse(await syncResponse.json()),
+            result: adaptVerificationResponse(warmupResult.payload),
           },
           status: 200,
         };
       }
-    } catch {
-      // Cold runtime fast-path misses are handled by async submit below.
-    }
-
-    const submitResponse = await fetch(`${backendUrl}/api/async/check`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(10000),
-    });
-
-    if (!submitResponse.ok) {
-      const errorText = await submitResponse.text();
+      if (warmupResult.kind === 'network_error') {
+        return buildConfigErrorResponse(warmupResult.errorMessage);
+      }
       return buildConfigErrorResponse(
-        `Async submit failed: ${submitResponse.status} - ${errorText}`
+        buildUpstreamHttpError(
+          'Sync verification failed',
+          warmupResult.status,
+          warmupResult.errorText
+        )
       );
     }
 
-    const submit = (await submitResponse.json()) as BackendAsyncSubmitResponse;
+    if (submitResult.kind === 'http_error') {
+      return buildConfigErrorResponse(
+        buildUpstreamHttpError('Async submit failed', submitResult.status, submitResult.errorText)
+      );
+    }
+
+    const submit = submitResult.payload;
     return {
       body: {
         jobId: submit.job_id,
@@ -220,7 +476,7 @@ export async function handleVerifyPoll(
     const response = await fetch(`${backendUrl}/api/async/check/${jobId}?wait_sec=1`, {
       method: 'GET',
       headers: buildBackendHeaders(config.apiKey),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(config.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS),
     });
 
     if (!response.ok) {

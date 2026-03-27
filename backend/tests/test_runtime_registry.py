@@ -10,21 +10,16 @@ from server.runtime_registry import (
 from server.settings import Settings
 
 
-def test_runtime_registry_seeds_curated_versions_with_428_default() -> None:
-    registry = build_runtime_registry("v4.28.0")
+def test_runtime_registry_seeds_curated_versions_with_415_default() -> None:
+    registry = build_runtime_registry("v4.15.0")
 
-    assert registry.default_runtime_id == "v4.28.0"
+    assert registry.default_runtime_id == "v4.15.0"
     assert registry.known_runtime_ids() == [
         "v4.9.0",
         "v4.15.0",
-        "v4.19.0",
-        "v4.21.0",
-        "v4.26.0",
-        "v4.27.0",
-        "v4.28.0",
     ]
     assert registry.require("v4.9.0").display_name == "Mathlib 4.9.0"
-    assert registry.require("v4.28.0").is_default is True
+    assert registry.require("v4.15.0").is_default is True
 
 
 def test_gateway_runtime_validation_requires_seeded_runtime_wiring() -> None:
@@ -48,7 +43,7 @@ def test_gateway_runtime_validation_accepts_fully_wired_seeded_registry() -> Non
     settings.async_enabled = True
     settings.railway_environment_id = "railway-env"
 
-    registry = build_runtime_registry("v4.28.0", env=env)
+    registry = build_runtime_registry("v4.15.0", env=env)
     validate_runtime_configuration(settings, registry)
 
 
@@ -56,8 +51,8 @@ def test_embedded_runtime_validation_requires_runtime_service_wiring() -> None:
     settings = Settings(_env_file=None)
     settings.async_enabled = True
     settings.embedded_worker_enabled = True
-    settings.runtime_id = "v4.28.0"
-    settings.lean_version = "v4.28.0"
+    settings.runtime_id = "v4.15.0"
+    settings.lean_version = "v4.15.0"
     settings.init_repls = {}
 
     with pytest.raises(RuntimeConfigurationError, match="LEAN_SERVER_RUNTIME_SERVICE_ID"):
@@ -66,18 +61,18 @@ def test_embedded_runtime_validation_requires_runtime_service_wiring() -> None:
 
 def test_embedded_runtime_validation_rejects_version_mismatch() -> None:
     env = {
-        runtime_env_key("v4.28.0", "SERVICE_ID"): "runtime-service",
-        runtime_env_key("v4.28.0", "BASE_URL"): "https://v4.28.0.internal",
+        runtime_env_key("v4.15.0", "SERVICE_ID"): "runtime-service",
+        runtime_env_key("v4.15.0", "BASE_URL"): "https://v4.15.0.internal",
     }
     settings = Settings(_env_file=None)
     settings.async_enabled = True
     settings.embedded_worker_enabled = True
-    settings.runtime_id = "v4.28.0"
-    settings.lean_version = "v4.27.0"
+    settings.runtime_id = "v4.15.0"
+    settings.lean_version = "v4.9.0"
     settings.runtime_service_id = "runtime-service"
     settings.railway_environment_id = "railway-env"
     settings.init_repls = {}
 
-    registry = build_runtime_registry("v4.28.0", env=env)
+    registry = build_runtime_registry("v4.15.0", env=env)
     with pytest.raises(RuntimeConfigurationError, match="LEAN_SERVER_LEAN_VERSION"):
         validate_runtime_configuration(settings, registry)

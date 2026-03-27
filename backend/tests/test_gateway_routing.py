@@ -23,7 +23,7 @@ def _gateway_app() -> Settings:
     settings.async_use_in_memory_backend = True
     settings.gateway_enabled = True
     settings.runtime_id = "gateway"
-    settings.default_runtime_id = "v4.28.0"
+    settings.default_runtime_id = "v4.15.0"
     settings.railway_environment_id = "railway-env"
     return settings
 
@@ -45,8 +45,10 @@ def test_gateway_runtimes_endpoint_exposes_registry(monkeypatch) -> None:  # typ
         response = client.get("/api/runtimes")
         assert response.status_code == 200
         body = response.json()
-        assert body["default_runtime_id"] == "v4.28.0"
+        assert body["default_runtime_id"] == "v4.15.0"
         assert any(runtime["runtime_id"] == "v4.9.0" for runtime in body["runtimes"])
+        assert any(runtime["runtime_id"] == "v4.15.0" for runtime in body["runtimes"])
+        assert len(body["runtimes"]) == 2
 
 
 def test_gateway_sync_check_proxies_to_warm_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -58,11 +60,11 @@ def test_gateway_sync_check_proxies_to_warm_runtime(monkeypatch) -> None:  # typ
         gateway = app.state.runtime_gateway
 
         async def fake_is_warm(runtime):  # type: ignore[no-untyped-def]
-            return runtime.runtime_id == "v4.28.0"
+            return runtime.runtime_id == "v4.15.0"
 
         async def fake_proxy(runtime, payload):  # type: ignore[no-untyped-def]
-            assert runtime.runtime_id == "v4.28.0"
-            assert payload["runtime_id"] == "v4.28.0"
+            assert runtime.runtime_id == "v4.15.0"
+            assert payload["runtime_id"] == "v4.15.0"
             return CheckResponse(
                 results=[ReplResponse(id="verification", time=0.1, response={"env": 0})]
             )
@@ -78,7 +80,7 @@ def test_gateway_sync_check_proxies_to_warm_runtime(monkeypatch) -> None:  # typ
             "/api/check",
             json={
                 "snippets": [{"id": "verification", "code": "#check Nat"}],
-                "runtime_id": "v4.28.0",
+                "runtime_id": "v4.15.0",
             },
         )
         assert response.status_code == 200
@@ -126,7 +128,7 @@ async def test_gateway_runtime_warm_check_requires_ready_health(monkeypatch) -> 
 
     async with LifespanManager(app):
         gateway = app.state.runtime_gateway
-        runtime = gateway.require_runtime("v4.27.0")
+        runtime = gateway.require_runtime("v4.15.0")
 
         async def fake_get(*args, **kwargs):  # type: ignore[no-untyped-def]
             _ = args, kwargs
@@ -152,7 +154,7 @@ async def test_gateway_runtime_warm_check_accepts_ready_health(monkeypatch) -> N
 
     async with LifespanManager(app):
         gateway = app.state.runtime_gateway
-        runtime = gateway.require_runtime("v4.27.0")
+        runtime = gateway.require_runtime("v4.15.0")
 
         async def fake_get(*args, **kwargs):  # type: ignore[no-untyped-def]
             _ = args, kwargs
@@ -178,8 +180,8 @@ def _runtime_app() -> Settings:
     settings.database_url = None
     settings.async_enabled = False
     settings.gateway_enabled = False
-    settings.runtime_id = "v4.27.0"
-    settings.lean_version = "v4.27.0"
+    settings.runtime_id = "v4.15.0"
+    settings.lean_version = "v4.15.0"
     settings.max_repls = 1
     settings.max_repl_uses = 1
     settings.init_repls = {}
@@ -211,9 +213,9 @@ async def test_runtime_health_reports_readiness_transition(monkeypatch) -> None:
             assert before.json() == {
                 "status": "ok",
                 "mode": "runtime",
-                "runtime_id": "v4.27.0",
+                "runtime_id": "v4.15.0",
                 "ready": False,
-                "ready_reason": "Runtime v4.27.0 verifier warmup is still in progress.",
+                "ready_reason": "Runtime v4.15.0 verifier warmup is still in progress.",
             }
 
             release_warmup.set()
@@ -224,7 +226,7 @@ async def test_runtime_health_reports_readiness_transition(monkeypatch) -> None:
             assert after.json() == {
                 "status": "ok",
                 "mode": "runtime",
-                "runtime_id": "v4.27.0",
+                "runtime_id": "v4.15.0",
                 "ready": True,
                 "ready_reason": None,
             }
