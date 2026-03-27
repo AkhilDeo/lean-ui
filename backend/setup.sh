@@ -95,6 +95,8 @@ if version_lte "$REPL_BRANCH" "v4.9.0"; then
       if git merge-base --is-ancestor 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4 HEAD; then
         echo "Legacy flush patch already present for $REPL_BRANCH"
       else
+        git config user.name "Lean UI Builder"
+        git config user.email "builder@lean-ui.invalid"
         git cherry-pick 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4
       fi
     else
