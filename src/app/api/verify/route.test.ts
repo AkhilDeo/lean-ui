@@ -195,6 +195,80 @@ test('retries sync warmup when async submit is disabled and eventually succeeds'
   });
 });
 
+test('retries sync warmup when async submit times out and eventually succeeds', async (t) => {
+  const originalFetch = global.fetch;
+  const requests: string[] = [];
+  let syncAttempts = 0;
+
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  global.fetch = (async (input) => {
+    const url = String(input);
+    requests.push(url);
+
+    if (url.endsWith('/api/check')) {
+      syncAttempts += 1;
+      if (syncAttempts < 3) {
+        return new Response(
+          JSON.stringify({
+            detail:
+              'Runtime v4.15.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
+          }),
+          { status: 503, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              id: 'verification',
+              status: 'valid',
+              passed: true,
+              response: {},
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    throw new DOMException('The operation was aborted.', 'AbortError');
+  }) as typeof fetch;
+
+  const response = await handleVerifyPost(createVerifyRequest(), {
+    backendUrl: 'https://lean-ui-production.up.railway.app',
+    apiKey: 'test-secret',
+    hasExplicitServerUrl: true,
+    isProduction: true,
+    asyncSubmitTimeoutMs: 1,
+    warmupRetryDelayMs: 0,
+    warmupRetryMaxAttempts: 3,
+  });
+
+  assert.deepEqual(requests, [
+    'https://lean-ui-production.up.railway.app/api/check',
+    'https://lean-ui-production.up.railway.app/api/async/check',
+    'https://lean-ui-production.up.railway.app/api/check',
+    'https://lean-ui-production.up.railway.app/api/check',
+  ]);
+  assert.deepEqual(response.body, {
+    jobId: null,
+    status: 'completed',
+    runtimeId: 'v4.15.0',
+    result: {
+      error: null,
+      infos: [],
+      passed: true,
+      status: 'valid',
+      time: 0,
+      warnings: [],
+    },
+  });
+});
+
 test('returns a friendly warmup error when async submit is disabled and sync never becomes ready', async (t) => {
   const originalFetch = global.fetch;
   const requests: string[] = [];

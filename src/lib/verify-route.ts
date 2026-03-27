@@ -403,13 +403,10 @@ export async function handleVerifyPost(
       config.asyncSubmitTimeoutMs ?? DEFAULT_ASYNC_SUBMIT_TIMEOUT_MS
     );
 
-    if (submitResult.kind === 'network_error') {
-      return buildConfigErrorResponse(submitResult.errorMessage);
-    }
-
     if (
-      submitResult.kind === 'http_error' &&
-      isAsyncQueueDisabledError(submitResult.status, submitResult.errorText)
+      submitResult.kind === 'network_error' ||
+      (submitResult.kind === 'http_error' &&
+        isAsyncQueueDisabledError(submitResult.status, submitResult.errorText))
     ) {
       const warmupResult = await retrySyncUntilWarm(backendUrl, headers, payload, config);
       if (warmupResult === 'warmup_timeout') {
