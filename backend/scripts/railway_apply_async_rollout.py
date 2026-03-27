@@ -277,6 +277,15 @@ def get_public_domain(client: RailwayClient, *, service_id: str) -> str | None:
     return domains[0]["domain"]
 
 
+def get_private_base_url(client: RailwayClient, *, service_id: str) -> str:
+    variables = get_service_variables(client, service_id=service_id)
+    private_domain = variables.get("RAILWAY_PRIVATE_DOMAIN")
+    if not private_domain:
+        raise RuntimeError(f"Service {service_id} is missing RAILWAY_PRIVATE_DOMAIN")
+    # Railway private networking routes requests over the internal HTTP listener.
+    return f"http://{private_domain}:8080"
+
+
 def choose_redis_url(redis_vars: dict[str, str]) -> str:
     for key in ("REDIS_URL", "REDIS_PRIVATE_URL", "REDIS_URI"):
         value = redis_vars.get(key)
@@ -437,10 +446,9 @@ def main() -> int:
 
     runtime_service_urls: dict[str, str] = {}
     for runtime_id in seeded_runtime_ids():
-        domain = get_public_domain(client, service_id=runtime_service_ids[runtime_id])
-        if not domain:
-            raise RuntimeError(f"Runtime service {runtime_id} has no public domain")
-        runtime_service_urls[runtime_id] = f"https://{domain}"
+        runtime_service_urls[runtime_id] = get_private_base_url(
+            client, service_id=runtime_service_ids[runtime_id]
+        )
 
     configure_gateway_service(
         client,
