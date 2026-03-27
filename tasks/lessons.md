@@ -12,6 +12,11 @@ Capture a new entry after every user correction.
 ## Entries
 - Add newest entries at the top.
 - Date: 2026-03-27
+- Correction received: Long proofs must not die on short timeouts, and the UI must fully support durable async verification with a real Redis-backed queue instead of a broken pseudo-async setup.
+- Root cause: I optimized around the short sync-path timeout and then disabled async in production to recover service health, which fixed the outage but violated the product requirement for long-running proofs and durable async UX.
+- New preventive rule: When proof workloads can be long-running, treat async infrastructure and long-job UX as first-class product requirements: size timeouts for real proof duration, preserve in-flight jobs across reloads, and never leave production on an "enabled but unhealthy" queue path.
+- Where applied: `tasks/lessons.md`, the async-first verification flow, long-job UI persistence/resume behavior, backend timeout defaults, Redis startup health checks, and the Railway Redis + worker rollout.
+- Date: 2026-03-27
 - Correction received: Drop every Lean runtime except `v4.15.0` and `v4.9.0`; do not keep newer versions in the supported product/runtime contract.
 - Root cause: I was still carrying forward the repo's earlier multi-runtime expansion and treating the seeded runtime list as product intent instead of re-scoping the system to the two versions the user actually wants.
 - New preventive rule: When the user narrows supported runtime versions, trim the full contract end-to-end: seeded registry, defaults, picker options, tests, docs, and deployment wiring, not just the visible UI list.

@@ -7,19 +7,9 @@ import { CheckCircle, XCircle, AlertTriangle, Clock } from 'lucide-react';
 
 interface VerificationPanelProps {
   result: VerificationResult | null;
-  isLoading: boolean;
 }
 
-export function VerificationPanel({ result, isLoading }: VerificationPanelProps) {
-  if (isLoading) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4" />
-        <p>{result?.progressMessage ?? 'Submitting verification job...'}</p>
-      </div>
-    );
-  }
-
+export function VerificationPanel({ result }: VerificationPanelProps) {
   if (!result) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
@@ -44,6 +34,13 @@ export function VerificationPanel({ result, isLoading }: VerificationPanelProps)
   };
 
   const getStatusBadge = () => {
+    if (result.status === 'pending') {
+      return (
+        <Badge variant="secondary">
+          {result.jobStatus === 'running' ? 'Running' : 'Queued'}
+        </Badge>
+      );
+    }
     switch (result.status) {
       case 'success':
         return <Badge className="bg-green-500/20 text-green-500 border-green-500/30">Verified</Badge>;
@@ -71,6 +68,26 @@ export function VerificationPanel({ result, isLoading }: VerificationPanelProps)
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-4">
+          {result.status === 'pending' && (
+            <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
+              <div className="mb-4 h-10 w-10 animate-spin rounded-full border-b-2 border-primary" />
+              <p className="text-lg font-medium text-foreground">
+                {result.jobStatus === 'running' ? 'Verification in progress' : 'Verification queued'}
+              </p>
+              <p className="mt-2 max-w-sm text-sm">
+                {result.progressMessage ?? 'Submitting verification job...'}
+              </p>
+              <p className="mt-2 max-w-sm text-xs text-muted-foreground">
+                Complex proofs can take several minutes. This job will continue even if you reload the page.
+              </p>
+              {result.jobExpiresAt && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Job expires at {new Date(result.jobExpiresAt).toLocaleString()}.
+                </p>
+              )}
+            </div>
+          )}
+
           {result.status === 'success' &&
             result.errors.length === 0 &&
             result.warnings.length === 0 && (
@@ -80,6 +97,15 @@ export function VerificationPanel({ result, isLoading }: VerificationPanelProps)
                 <p className="text-sm text-muted-foreground mt-1">Your Lean code is valid</p>
               </div>
             )}
+
+          {result.status === 'error' && result.jobStatus === 'expired' && (
+            <div className="mb-6 rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+              <p className="font-medium text-amber-200">Verification job expired</p>
+              <p className="mt-1 text-amber-100/90">
+                The queued proof is no longer available. Resubmit it to start a new async verification.
+              </p>
+            </div>
+          )}
 
           {result.errors.length > 0 && (
             <div className="mb-6">

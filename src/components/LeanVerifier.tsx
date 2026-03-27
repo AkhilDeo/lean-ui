@@ -33,6 +33,10 @@ theorem hello_world : 1 + 1 = 2 := by
   rfl
 `;
 
+const POLL_RETRY_LIMIT = 3;
+const POLL_RETRY_DELAY_MS = 1500;
+const POLL_INTERVAL_MS = 1200;
+
 interface RuntimeApiResponse {
   defaultRuntimeId: string;
   runtimes: RuntimeOption[];
@@ -54,29 +58,41 @@ function toUiStatus(result: VerifyApiResponse): VerificationResult['status'] {
 function buildProgressMessage(status: VerifyJobResponse['status'], runtimeLabel: string): string {
   switch (status) {
     case 'queued':
-      return `Queued on ${runtimeLabel}. Waiting for runtime to start.`;
+      return `Queued on ${runtimeLabel}. Waiting for worker and runtime capacity.`;
     case 'running':
-      return `Running on ${runtimeLabel}...`;
+      return `Running on ${runtimeLabel}. Complex proofs can take several minutes.`;
     case 'failed':
       return `Verification failed on ${runtimeLabel}.`;
+    case 'expired':
+      return `Verification job expired on ${runtimeLabel}.`;
     default:
       return `Submitting to ${runtimeLabel}...`;
   }
 }
 
+function isPendingJobStatus(
+  status: VerifyJobResponse['status'] | VerificationResult['jobStatus'] | null | undefined
+): status is 'queued' | 'running' {
+  return status === 'queued' || status === 'running';
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function LeanVerifier() {
   const [code, setCode] = useState(DEFAULT_CODE);
   const [title, setTitle] = useState('');
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [currentResult, setCurrentResult] = useState<VerificationResult | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [isResizing, setIsResizing] = useState(false);
   const [runtimes, setRuntimes] = useState<RuntimeOption[]>([]);
   const [selectedRuntimeId, setSelectedRuntimeId] = useState('v4.15.0');
+  const [draftMode, setDraftMode] = useState(false);
   const resizeRef = useRef<HTMLDivElement>(null);
-  const pollingRef = useRef(false);
+  const activePollsRef = useRef<Set<string>>(new Set());
 
   const {
     history,
@@ -88,10 +104,24 @@ export function LeanVerifier() {
     getVerification,
   } = useVerificationHistory();
 
+  const currentResult =
+    selectedId === null ? null : history.find((item) => item.id === selectedId) ?? null;
+
   const selectedRuntime =
     runtimes.find((runtime) => runtime.runtimeId === selectedRuntimeId) ??
     runtimes.find((runtime) => runtime.isDefault) ??
     null;
+
+  const stopPollingJob = useCallback((jobId: string | null | undefined) => {
+    if (!jobId) {
+      return;
+    }
+    activePollsRef.current.delete(jobId);
+  }, []);
+
+  const stopAllPolling = useCallback(() => {
+    activePollsRef.current.clear();
+  }, []);
 
   const applyVerificationOutcome = useCallback(
     (id: string, runtime: RuntimeOption, result: VerifyApiResponse) => {
@@ -101,75 +131,162 @@ export function LeanVerifier() {
         warnings: Array.isArray(result.warnings) ? result.warnings : [],
         progressMessage: null,
         jobId: null,
+        jobStatus: 'completed',
+        jobExpiresAt: null,
         runtimeId: runtime.runtimeId,
         runtimeLabel: runtime.displayName,
         leanVersion: runtime.leanVersion,
       };
       updateVerification(id, updatedResult);
-      setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
+    },
+    [updateVerification]
+  );
+
+  const markVerificationPending = useCallback(
+    (
+      id: string,
+      runtime: RuntimeOption,
+      status: 'queued' | 'running',
+      jobId: string,
+      expiresAt: string | null,
+      progressMessage?: string
+    ) => {
+      updateVerification(id, {
+        status: 'pending',
+        errors: [],
+        warnings: [],
+        progressMessage: progressMessage ?? buildProgressMessage(status, runtime.displayName),
+        jobId,
+        jobStatus: status,
+        jobExpiresAt: expiresAt,
+        runtimeId: runtime.runtimeId,
+        runtimeLabel: runtime.displayName,
+        leanVersion: runtime.leanVersion,
+      });
+    },
+    [updateVerification]
+  );
+
+  const markVerificationTerminal = useCallback(
+    (
+      id: string,
+      runtime: RuntimeOption,
+      jobStatus: 'failed' | 'expired',
+      error: string,
+      expiresAt: string | null
+    ) => {
+      updateVerification(id, {
+        status: 'error',
+        errors: [error],
+        warnings: [],
+        progressMessage: null,
+        jobStatus,
+        jobExpiresAt: expiresAt,
+        runtimeId: runtime.runtimeId,
+        runtimeLabel: runtime.displayName,
+        leanVersion: runtime.leanVersion,
+      });
     },
     [updateVerification]
   );
 
   const pollVerificationJob = useCallback(
-    async (id: string, jobId: string, runtime: RuntimeOption) => {
-      pollingRef.current = true;
-      try {
-        while (pollingRef.current) {
-          const response = await fetch(`/api/verify/${jobId}`);
-          const poll = (await response.json()) as VerifyJobResponse;
-
-          if (poll.status === 'completed' && poll.result) {
-            applyVerificationOutcome(id, runtime, poll.result);
-            setIsVerifying(false);
-            return;
-          }
-
-          if (poll.status === 'failed') {
-            const updatedResult: Partial<VerificationResult> = {
-              status: 'error',
-              errors: [poll.error || 'Verification job failed.'],
-              warnings: [],
-              progressMessage: null,
-              jobId: jobId,
-            };
-            updateVerification(id, updatedResult);
-            setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
-            setIsVerifying(false);
-            return;
-          }
-
-          const updatedResult: Partial<VerificationResult> = {
-            progressMessage: buildProgressMessage(poll.status, runtime.displayName),
-            jobId,
-          };
-          updateVerification(id, updatedResult);
-          setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
-          await new Promise((resolve) => setTimeout(resolve, 1200));
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown polling error';
-        const updatedResult: Partial<VerificationResult> = {
-          status: 'error',
-          errors: [`Failed while polling verification job: ${message}`],
-          warnings: [],
-          progressMessage: null,
-        };
-        updateVerification(id, updatedResult);
-        setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
-      } finally {
-        pollingRef.current = false;
-        setIsVerifying(false);
+    (id: string, jobId: string, runtime: RuntimeOption) => {
+      if (activePollsRef.current.has(jobId)) {
+        return;
       }
+
+      activePollsRef.current.add(jobId);
+
+      void (async () => {
+        let consecutiveFailures = 0;
+
+        try {
+          while (activePollsRef.current.has(jobId)) {
+            try {
+              const response = await fetch(`/api/verify/${jobId}`);
+              const poll = (await response.json()) as VerifyJobResponse;
+
+              if (!activePollsRef.current.has(jobId)) {
+                return;
+              }
+
+              if (poll.status === 'completed' && poll.result) {
+                applyVerificationOutcome(id, runtime, poll.result);
+                return;
+              }
+
+              if (poll.status === 'failed' || poll.status === 'expired') {
+                markVerificationTerminal(
+                  id,
+                  runtime,
+                  poll.status,
+                  poll.error || 'Verification job failed.',
+                  poll.expiresAt ?? null
+                );
+                return;
+              }
+
+              if (!isPendingJobStatus(poll.status)) {
+                markVerificationTerminal(
+                  id,
+                  runtime,
+                  'failed',
+                  poll.error || 'Verification job completed without a result payload.',
+                  poll.expiresAt ?? null
+                );
+                return;
+              }
+
+              markVerificationPending(
+                id,
+                runtime,
+                poll.status,
+                jobId,
+                poll.expiresAt ?? null
+              );
+              consecutiveFailures = 0;
+              await sleep(POLL_INTERVAL_MS);
+            } catch (error) {
+              consecutiveFailures += 1;
+              const message = error instanceof Error ? error.message : 'Unknown polling error';
+
+              if (consecutiveFailures >= POLL_RETRY_LIMIT) {
+                markVerificationTerminal(
+                  id,
+                  runtime,
+                  'failed',
+                  `Failed while polling verification job: ${message}`,
+                  null
+                );
+                return;
+              }
+
+              markVerificationPending(
+                id,
+                runtime,
+                'running',
+                jobId,
+                null,
+                `Connection hiccup while checking ${runtime.displayName}. Retrying...`
+              );
+              await sleep(POLL_RETRY_DELAY_MS * consecutiveFailures);
+            }
+          }
+        } finally {
+          activePollsRef.current.delete(jobId);
+        }
+      })();
     },
-    [applyVerificationOutcome, updateVerification]
+    [applyVerificationOutcome, markVerificationPending, markVerificationTerminal]
   );
 
   const handleVerify = useCallback(async () => {
-    if (!code.trim() || !selectedRuntime) return;
+    if (!code.trim() || !selectedRuntime) {
+      return;
+    }
 
-    setIsVerifying(true);
-    pollingRef.current = true;
+    setIsSubmitting(true);
     const id = uuidv4();
     const verificationTitle = title.trim() || generateRandomName();
 
@@ -183,6 +300,8 @@ export function LeanVerifier() {
       timestamp: new Date(),
       progressMessage: `Submitting to ${selectedRuntime.displayName}...`,
       jobId: null,
+      jobStatus: 'queued',
+      jobExpiresAt: null,
       runtimeId: selectedRuntime.runtimeId,
       runtimeLabel: selectedRuntime.displayName,
       leanVersion: selectedRuntime.leanVersion,
@@ -190,7 +309,7 @@ export function LeanVerifier() {
 
     addVerification(newVerification);
     setSelectedId(id);
-    setCurrentResult(newVerification);
+    setDraftMode(false);
     setTitle('');
 
     try {
@@ -204,52 +323,60 @@ export function LeanVerifier() {
 
       if (result.status === 'completed' && result.result) {
         applyVerificationOutcome(id, selectedRuntime, result.result);
-        setIsVerifying(false);
-        pollingRef.current = false;
         return;
       }
 
-      if (!result.jobId) {
-        const updatedResult: Partial<VerificationResult> = {
-          status: 'error',
-          errors: [result.error || 'Verification submission failed.'],
-          warnings: [],
-          progressMessage: null,
-        };
-        updateVerification(id, updatedResult);
-        setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
-        setIsVerifying(false);
-        pollingRef.current = false;
+      if (result.status === 'failed' || result.status === 'expired') {
+        markVerificationTerminal(
+          id,
+          selectedRuntime,
+          result.status,
+          result.error || 'Verification submission failed.',
+          result.expiresAt ?? null
+        );
         return;
       }
 
-      const queuedUpdate: Partial<VerificationResult> = {
-        jobId: result.jobId,
-        progressMessage: buildProgressMessage(result.status, selectedRuntime.displayName),
-      };
-      updateVerification(id, queuedUpdate);
-      setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...queuedUpdate } : prev));
-      await pollVerificationJob(id, result.jobId, selectedRuntime);
+      if (!result.jobId || !isPendingJobStatus(result.status)) {
+        markVerificationTerminal(
+          id,
+          selectedRuntime,
+          'failed',
+          result.error || 'Verification submission failed.',
+          result.expiresAt ?? null
+        );
+        return;
+      }
+
+      markVerificationPending(
+        id,
+        selectedRuntime,
+        result.status,
+        result.jobId,
+        result.expiresAt ?? null
+      );
+      pollVerificationJob(id, result.jobId, selectedRuntime);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      const updatedResult: Partial<VerificationResult> = {
-        status: 'error',
-        errors: [`Failed to connect to verification server: ${errorMessage}`],
-        progressMessage: null,
-      };
-      updateVerification(id, updatedResult);
-      setCurrentResult((prev) => (prev && prev.id === id ? { ...prev, ...updatedResult } : prev));
-      setIsVerifying(false);
-      pollingRef.current = false;
+      markVerificationTerminal(
+        id,
+        selectedRuntime,
+        'failed',
+        `Failed to connect to verification server: ${errorMessage}`,
+        null
+      );
+    } finally {
+      setIsSubmitting(false);
     }
   }, [
     addVerification,
     applyVerificationOutcome,
     code,
+    markVerificationPending,
+    markVerificationTerminal,
     pollVerificationJob,
     selectedRuntime,
     title,
-    updateVerification,
   ]);
 
   const handleSelectHistory = useCallback(
@@ -257,9 +384,10 @@ export function LeanVerifier() {
       const verification = getVerification(id);
       if (verification) {
         setSelectedId(id);
+        setDraftMode(false);
         setCode(verification.code);
+        setTitle(verification.title);
         setSelectedRuntimeId(verification.runtimeId);
-        setCurrentResult(verification);
       }
     },
     [getVerification]
@@ -267,15 +395,17 @@ export function LeanVerifier() {
 
   const handleDeleteHistory = useCallback(
     (id: string) => {
+      const verification = getVerification(id);
+      stopPollingJob(verification?.jobId);
       deleteVerification(id);
       if (selectedId === id) {
         setSelectedId(null);
-        setCurrentResult(null);
+        setDraftMode(true);
         setCode(DEFAULT_CODE);
         setTitle('');
       }
     },
-    [deleteVerification, selectedId]
+    [deleteVerification, getVerification, selectedId, stopPollingJob]
   );
 
   const handleClearHistory = useCallback(() => {
@@ -283,18 +413,18 @@ export function LeanVerifier() {
   }, []);
 
   const confirmClearHistory = useCallback(() => {
+    stopAllPolling();
     clearHistory();
     setSelectedId(null);
-    setCurrentResult(null);
+    setDraftMode(true);
     setCode(DEFAULT_CODE);
     setTitle('');
     setShowClearDialog(false);
-  }, [clearHistory]);
+  }, [clearHistory, stopAllPolling]);
 
   const handleNew = useCallback(() => {
-    pollingRef.current = false;
     setSelectedId(null);
-    setCurrentResult(null);
+    setDraftMode(true);
     setCode(DEFAULT_CODE);
     setTitle('');
   }, []);
@@ -309,7 +439,9 @@ export function LeanVerifier() {
           return;
         }
         const payload = (await response.json()) as RuntimeApiResponse;
-        if (cancelled) return;
+        if (cancelled) {
+          return;
+        }
         setRuntimes(payload.runtimes);
         setSelectedRuntimeId(payload.defaultRuntimeId);
       } catch (error) {
@@ -324,21 +456,39 @@ export function LeanVerifier() {
   }, []);
 
   useEffect(() => {
-    if (isLoaded && history.length > 0 && !selectedId) {
+    if (isLoaded && history.length > 0 && !selectedId && !draftMode) {
       const latest = history[0];
       setSelectedId(latest.id);
       setCode(latest.code);
       setTitle(latest.title);
       setSelectedRuntimeId(latest.runtimeId);
-      setCurrentResult(latest);
     }
-  }, [isLoaded, history, selectedId]);
+  }, [draftMode, history, isLoaded, selectedId]);
+
+  useEffect(() => {
+    if (!isLoaded) {
+      return;
+    }
+
+    for (const item of history) {
+      if (item.jobId && isPendingJobStatus(item.jobStatus)) {
+        const runtime =
+          runtimes.find((candidate) => candidate.runtimeId === item.runtimeId) ?? {
+            runtimeId: item.runtimeId,
+            displayName: item.runtimeLabel,
+            leanVersion: item.leanVersion,
+            isDefault: false,
+          };
+        pollVerificationJob(item.id, item.jobId, runtime);
+      }
+    }
+  }, [history, isLoaded, pollVerificationJob, runtimes]);
 
   useEffect(() => {
     return () => {
-      pollingRef.current = false;
+      stopAllPolling();
     };
-  }, []);
+  }, [stopAllPolling]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -347,7 +497,9 @@ export function LeanVerifier() {
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing) return;
+      if (!isResizing) {
+        return;
+      }
       const newWidth = window.innerWidth - e.clientX;
       if (newWidth >= 300 && newWidth <= 800) {
         setRightSidebarWidth(newWidth);
@@ -406,7 +558,9 @@ export function LeanVerifier() {
               </div>
               <div className="min-w-0">
                 <h1 className="text-lg font-bold">Lean Runtime Gateway</h1>
-                <p className="text-xs text-muted-foreground">Async-first verification across Lean 4 runtimes</p>
+                <p className="text-xs text-muted-foreground">
+                  Async-first verification across Lean 4 runtimes
+                </p>
               </div>
             </div>
             <div className="ml-auto flex flex-1 flex-wrap items-center justify-end gap-3">
@@ -432,13 +586,13 @@ export function LeanVerifier() {
               />
               <Button
                 onClick={handleVerify}
-                disabled={isVerifying || !code.trim() || !selectedRuntime}
+                disabled={isSubmitting || !code.trim() || !selectedRuntime}
                 className="h-9 w-[9.5rem] justify-center gap-2"
               >
-                {isVerifying ? (
+                {isSubmitting ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Running...
+                    Starting...
                   </>
                 ) : (
                   <>
@@ -474,7 +628,7 @@ export function LeanVerifier() {
             className="shrink-0 bg-card min-h-0 flex flex-col"
             style={{ width: `${rightSidebarWidth}px` }}
           >
-            <VerificationPanel result={currentResult} isLoading={isVerifying} />
+            <VerificationPanel result={currentResult} />
           </div>
         </div>
       </div>

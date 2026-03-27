@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     default_runtime_id: str = "v4.15.0"
     gateway_enabled: bool = False
     embedded_worker_enabled: bool = False
-    gateway_sync_proxy_timeout_sec: int = 3
+    gateway_sync_proxy_timeout_sec: int = 300
     gateway_wake_replicas: int = 1
     runtime_idle_ttl_sec: int = 15 * 60
     runtime_service_id: str | None = None
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     max_repls: int = max((os.cpu_count() or 1) - 1, 1)
     max_repl_uses: int = -1
     max_repl_mem: int = 8
-    max_wait: int = 60
+    max_wait: int = 300
 
     init_repls: dict[str, int] = {}
 
@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     autoscale_check_interval_sec: int = 30
 
     # Request policy hardening
-    request_timeout_max_sec: int = 60
+    request_timeout_max_sec: int = 300
     allow_client_debug: bool = False
     allow_client_timeout_override: bool = True
 

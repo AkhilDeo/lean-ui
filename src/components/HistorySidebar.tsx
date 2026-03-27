@@ -113,6 +113,11 @@ export function HistorySidebar({
                         {formatTime(item.timestamp)}
                       </p>
                     </div>
+                    {item.status === 'pending' && item.progressMessage && (
+                      <p className="mt-2 text-xs text-muted-foreground/80 line-clamp-2">
+                        {item.progressMessage}
+                      </p>
+                    )}
                   </div>
                   <Button
                     variant="ghost"

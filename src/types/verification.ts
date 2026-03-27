@@ -7,7 +7,9 @@ export interface VerificationResult {
   warnings: string[];
   timestamp: Date;
   jobId?: string | null;
+  jobStatus?: VerificationJobStatus | null;
   progressMessage?: string | null;
+  jobExpiresAt?: string | null;
   runtimeId: string;
   runtimeLabel: string;
   leanVersion: string;
@@ -32,7 +34,8 @@ export type VerificationJobStatus =
   | 'queued'
   | 'running'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'expired';
 
 export interface VerifyApiResponse {
   status: SnippetOutcomeStatus;
@@ -49,4 +52,5 @@ export interface VerifyJobResponse {
   runtimeId?: string | null;
   result?: VerifyApiResponse | null;
   error?: string | null;
+  expiresAt?: string | null;
 }

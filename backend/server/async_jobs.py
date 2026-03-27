@@ -1502,7 +1502,21 @@ async def create_async_jobs(settings: Settings) -> AsyncJobs:
             "redis dependency is not installed; install 'redis' to use async backend"
         )
 
-    redis = redis_from_url(settings.redis_url, decode_responses=False)
+    redis = redis_from_url(
+        settings.redis_url,
+        decode_responses=False,
+        socket_connect_timeout=5,
+        socket_timeout=5,
+        retry_on_timeout=False,
+        health_check_interval=30,
+    )
+    try:
+        await redis.ping()
+    except Exception as exc:
+        await redis.aclose()
+        raise RuntimeError(
+            "Async jobs redis backend is unhealthy; failed Redis startup ping"
+        ) from exc
     logger.info(
         "Async jobs configured with redis backend: queues=[{}, {}] key_prefix={} ttl_sec={} backlog_limit={}",
         settings.async_queue_name_light,

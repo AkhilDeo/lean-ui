@@ -91,8 +91,15 @@ install_repo repl "$REPL_REPO_URL" "$REPL_BRANCH" false
 if version_lte "$REPL_BRANCH" "v4.9.0"; then
   echo "Applying commit 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4 for $REPL_BRANCH (<=v4.9.0)..."
   pushd repl
-    git fetch origin 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4
-    git cherry-pick 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4
+    if git fetch origin 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4 >/dev/null 2>&1; then
+      if git merge-base --is-ancestor 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4 HEAD; then
+        echo "Legacy flush patch already present for $REPL_BRANCH"
+      else
+        git cherry-pick 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4
+      fi
+    else
+      echo "Legacy flush patch commit is unavailable upstream; continuing without it"
+    fi
     lake build
   popd
 fi

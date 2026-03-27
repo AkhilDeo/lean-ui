@@ -11,7 +11,7 @@ from server.settings import Settings
 
 def test_normalize_request_policy_applies_server_locks() -> None:
     settings = Settings(_env_file=None)
-    settings.request_timeout_max_sec = 60
+    settings.request_timeout_max_sec = 300
     settings.allow_client_timeout_override = True
     settings.allow_client_debug = False
 
@@ -21,7 +21,7 @@ def test_normalize_request_policy_applies_server_locks() -> None:
         reuse=False,
         settings=settings,
     )
-    assert policy.timeout == 60
+    assert policy.timeout == 300
     assert policy.debug is False
     assert policy.reuse is False
 
@@ -97,7 +97,7 @@ def test_api_check_applies_normalized_policy(
     }
     resp = root_client.post("/api/check", json=payload)
     assert resp.status_code == 200
-    assert captured["timeout"] == 60.0
+    assert captured["timeout"] == 300.0
     assert captured["debug"] is False
     assert captured["reuse"] is False
     body = resp.json()
@@ -125,6 +125,6 @@ def test_api_verify_applies_normalized_policy(
     }
     resp = root_client.post("/verify", json=payload)
     assert resp.status_code == 200
-    assert captured["timeout"] == 60.0
+    assert captured["timeout"] == 300.0
     assert captured["debug"] is False
     assert captured["reuse"] is False

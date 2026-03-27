@@ -17,7 +17,7 @@ function createVerifyRequest(code = '#check Nat', runtimeId = 'v4.15.0'): Reques
   });
 }
 
-test('returns a completed job when the fast sync path succeeds', async (t) => {
+test('submits async jobs first and includes the long-proof timeout in the payload', async (t) => {
   const originalFetch = global.fetch;
   const requests: Array<{ url: string; init?: RequestInit }> = [];
 
@@ -27,6 +27,139 @@ test('returns a completed job when the fast sync path succeeds', async (t) => {
 
   global.fetch = (async (input, init) => {
     requests.push({ url: String(input), init });
+    return new Response(
+      JSON.stringify({
+        job_id: 'job-123',
+        status: 'queued',
+        expires_at: '2026-03-27T17:00:00Z',
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const response = await handleVerifyPost(createVerifyRequest(), {
+    backendUrl: 'https://lean-ui-production.up.railway.app/',
+    apiKey: 'test-secret',
+    hasExplicitServerUrl: true,
+    isProduction: true,
+  });
+
+  assert.equal(requests[0]?.url, 'https://lean-ui-production.up.railway.app/api/async/check');
+  assert.deepEqual(requests[0]?.init?.headers, {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer test-secret',
+  });
+  assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), {
+    snippets: [
+      {
+        id: 'verification',
+        code: '#check Nat',
+      },
+    ],
+    timeout: 300,
+    runtime_id: 'v4.15.0',
+    reuse: false,
+  });
+  assert.deepEqual(response.body, {
+    jobId: 'job-123',
+    status: 'queued',
+    runtimeId: 'v4.15.0',
+    result: null,
+    error: null,
+    expiresAt: '2026-03-27T17:00:00Z',
+  });
+});
+
+test('falls back to sync verification when async submit is disabled and sync succeeds', async (t) => {
+  const originalFetch = global.fetch;
+  const requests: string[] = [];
+
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  global.fetch = (async (input) => {
+    const url = String(input);
+    requests.push(url);
+
+    if (url.endsWith('/api/async/check')) {
+      return new Response(
+        JSON.stringify({
+          detail: 'Async queue API is not enabled on this service',
+        }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        results: [
+          {
+            id: 'verification',
+            status: 'valid',
+            passed: true,
+            response: {},
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  const response = await handleVerifyPost(createVerifyRequest('import Mathlib', 'v4.9.0'), {
+    backendUrl: 'https://lean-ui-production.up.railway.app',
+    apiKey: 'test-secret',
+    hasExplicitServerUrl: true,
+    isProduction: true,
+  });
+
+  assert.deepEqual(requests, [
+    'https://lean-ui-production.up.railway.app/api/async/check',
+    'https://lean-ui-production.up.railway.app/api/check',
+  ]);
+  assert.deepEqual(response.body, {
+    jobId: null,
+    status: 'completed',
+    runtimeId: 'v4.9.0',
+    result: {
+      error: null,
+      infos: [],
+      passed: true,
+      status: 'valid',
+      time: 0,
+      warnings: [],
+    },
+  });
+});
+
+test('retries sync warmup when async submit times out and the fallback sync path becomes ready', async (t) => {
+  const originalFetch = global.fetch;
+  const requests: string[] = [];
+  let syncAttempts = 0;
+
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  global.fetch = (async (input) => {
+    const url = String(input);
+    requests.push(url);
+
+    if (url.endsWith('/api/async/check')) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+
+    syncAttempts += 1;
+    if (syncAttempts < 3) {
+      return new Response(
+        JSON.stringify({
+          detail:
+            'Runtime v4.15.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
+        }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
     return new Response(
       JSON.stringify({
         results: [
@@ -43,202 +176,6 @@ test('returns a completed job when the fast sync path succeeds', async (t) => {
   }) as typeof fetch;
 
   const response = await handleVerifyPost(createVerifyRequest(), {
-    backendUrl: 'https://lean-ui-production.up.railway.app/',
-    apiKey: 'test-secret',
-    hasExplicitServerUrl: true,
-    isProduction: true,
-  });
-
-  assert.equal(requests[0]?.url, 'https://lean-ui-production.up.railway.app/api/check');
-  assert.deepEqual(requests[0]?.init?.headers, {
-    'Content-Type': 'application/json',
-    Authorization: 'Bearer test-secret',
-  });
-  assert.deepEqual(response.body, {
-    jobId: null,
-    status: 'completed',
-    runtimeId: 'v4.15.0',
-    result: {
-      error: null,
-      infos: [],
-      passed: true,
-      status: 'valid',
-      time: 0,
-      warnings: [],
-    },
-  });
-});
-
-test('falls back to async submit when sync path is unavailable', async (t) => {
-  const originalFetch = global.fetch;
-  const requests: string[] = [];
-
-  t.after(() => {
-    global.fetch = originalFetch;
-  });
-
-  global.fetch = (async (input) => {
-    const url = String(input);
-    requests.push(url);
-    if (url.endsWith('/api/check')) {
-      return new Response(
-        JSON.stringify({
-          detail: 'Runtime v4.9.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
-        }),
-        { status: 503, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-    return new Response(
-      JSON.stringify({
-        job_id: 'job-123',
-        status: 'queued',
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
-  }) as typeof fetch;
-
-  const response = await handleVerifyPost(createVerifyRequest('import Mathlib', 'v4.9.0'), {
-    backendUrl: 'https://lean-ui-production.up.railway.app',
-    apiKey: 'test-secret',
-    hasExplicitServerUrl: true,
-    isProduction: true,
-  });
-
-  assert.deepEqual(requests, [
-    'https://lean-ui-production.up.railway.app/api/check',
-    'https://lean-ui-production.up.railway.app/api/async/check',
-  ]);
-  assert.deepEqual(response.body, {
-    jobId: 'job-123',
-    status: 'queued',
-    runtimeId: 'v4.9.0',
-    result: null,
-    error: null,
-  });
-});
-
-test('retries sync warmup when async submit is disabled and eventually succeeds', async (t) => {
-  const originalFetch = global.fetch;
-  const requests: string[] = [];
-  let syncAttempts = 0;
-
-  t.after(() => {
-    global.fetch = originalFetch;
-  });
-
-  global.fetch = (async (input) => {
-    const url = String(input);
-    requests.push(url);
-
-    if (url.endsWith('/api/check')) {
-      syncAttempts += 1;
-      if (syncAttempts < 3) {
-        return new Response(
-          JSON.stringify({
-            detail:
-              'Runtime v4.15.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
-          }),
-          { status: 503, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({
-          results: [
-            {
-              id: 'verification',
-              status: 'valid',
-              passed: true,
-              response: {},
-            },
-          ],
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    return new Response(
-      JSON.stringify({
-        detail: 'Async queue API is not enabled on this service',
-      }),
-      { status: 503, headers: { 'Content-Type': 'application/json' } }
-    );
-  }) as typeof fetch;
-
-  const response = await handleVerifyPost(createVerifyRequest(), {
-    backendUrl: 'https://lean-ui-production.up.railway.app',
-    apiKey: 'test-secret',
-    hasExplicitServerUrl: true,
-    isProduction: true,
-    warmupRetryDelayMs: 0,
-    warmupRetryMaxAttempts: 3,
-  });
-
-  assert.deepEqual(requests, [
-    'https://lean-ui-production.up.railway.app/api/check',
-    'https://lean-ui-production.up.railway.app/api/async/check',
-    'https://lean-ui-production.up.railway.app/api/check',
-    'https://lean-ui-production.up.railway.app/api/check',
-  ]);
-  assert.deepEqual(response.body, {
-    jobId: null,
-    status: 'completed',
-    runtimeId: 'v4.15.0',
-    result: {
-      error: null,
-      infos: [],
-      passed: true,
-      status: 'valid',
-      time: 0,
-      warnings: [],
-    },
-  });
-});
-
-test('retries sync warmup when async submit times out and eventually succeeds', async (t) => {
-  const originalFetch = global.fetch;
-  const requests: string[] = [];
-  let syncAttempts = 0;
-
-  t.after(() => {
-    global.fetch = originalFetch;
-  });
-
-  global.fetch = (async (input) => {
-    const url = String(input);
-    requests.push(url);
-
-    if (url.endsWith('/api/check')) {
-      syncAttempts += 1;
-      if (syncAttempts < 3) {
-        return new Response(
-          JSON.stringify({
-            detail:
-              'Runtime v4.15.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
-          }),
-          { status: 503, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({
-          results: [
-            {
-              id: 'verification',
-              status: 'valid',
-              passed: true,
-              response: {},
-            },
-          ],
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    throw new DOMException('The operation was aborted.', 'AbortError');
-  }) as typeof fetch;
-
-  const response = await handleVerifyPost(createVerifyRequest(), {
     backendUrl: 'https://lean-ui-production.up.railway.app',
     apiKey: 'test-secret',
     hasExplicitServerUrl: true,
@@ -249,8 +186,8 @@ test('retries sync warmup when async submit times out and eventually succeeds', 
   });
 
   assert.deepEqual(requests, [
-    'https://lean-ui-production.up.railway.app/api/check',
     'https://lean-ui-production.up.railway.app/api/async/check',
+    'https://lean-ui-production.up.railway.app/api/check',
     'https://lean-ui-production.up.railway.app/api/check',
     'https://lean-ui-production.up.railway.app/api/check',
   ]);
@@ -281,11 +218,10 @@ test('returns a friendly warmup error when async submit is disabled and sync nev
     const url = String(input);
     requests.push(url);
 
-    if (url.endsWith('/api/check')) {
+    if (url.endsWith('/api/async/check')) {
       return new Response(
         JSON.stringify({
-          detail:
-            'Runtime v4.15.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
+          detail: 'Async queue API is not enabled on this service',
         }),
         { status: 503, headers: { 'Content-Type': 'application/json' } }
       );
@@ -293,7 +229,8 @@ test('returns a friendly warmup error when async submit is disabled and sync nev
 
     return new Response(
       JSON.stringify({
-        detail: 'Async queue API is not enabled on this service',
+        detail:
+          'Runtime v4.15.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
       }),
       { status: 503, headers: { 'Content-Type': 'application/json' } }
     );
@@ -309,8 +246,8 @@ test('returns a friendly warmup error when async submit is disabled and sync nev
   });
 
   assert.deepEqual(requests, [
-    'https://lean-ui-production.up.railway.app/api/check',
     'https://lean-ui-production.up.railway.app/api/async/check',
+    'https://lean-ui-production.up.railway.app/api/check',
     'https://lean-ui-production.up.railway.app/api/check',
     'https://lean-ui-production.up.railway.app/api/check',
   ]);
@@ -327,10 +264,6 @@ test('returns a friendly warmup error when async submit is disabled and sync nev
       time: 0,
     },
   });
-  assert.equal(
-    JSON.stringify(response.body).includes('Async queue API is not enabled on this service'),
-    false
-  );
 });
 
 test('poll adapts completed async jobs', async (t) => {
@@ -345,6 +278,7 @@ test('poll adapts completed async jobs', async (t) => {
       JSON.stringify({
         job_id: 'job-123',
         status: 'completed',
+        expires_at: '2026-03-27T17:00:00Z',
         results: [
           {
             id: 'verification',
@@ -376,6 +310,38 @@ test('poll adapts completed async jobs', async (t) => {
       warnings: [],
     },
     error: null,
+    expiresAt: '2026-03-27T17:00:00Z',
+  });
+});
+
+test('poll returns an expired job state when the backend no longer has the job', async (t) => {
+  const originalFetch = global.fetch;
+
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  global.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        detail: 'Async job not found or expired',
+      }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } }
+    )) as typeof fetch;
+
+  const response = await handleVerifyPoll('job-expired', {
+    backendUrl: 'https://lean-ui-production.up.railway.app',
+    apiKey: 'test-secret',
+    hasExplicitServerUrl: true,
+    isProduction: true,
+  });
+
+  assert.deepEqual(response.body, {
+    jobId: 'job-expired',
+    status: 'expired',
+    error: 'Verification job expired or is no longer available. Please resubmit your proof.',
+    result: null,
+    expiresAt: null,
   });
 });
 

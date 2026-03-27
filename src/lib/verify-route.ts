@@ -23,13 +23,15 @@ export interface VerifyRouteResponse {
 interface BackendAsyncSubmitResponse {
   job_id: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
+  expires_at?: string;
 }
 
 interface BackendAsyncPollResponse {
   job_id: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'expired';
   results?: unknown[];
   error?: string | null;
+  expires_at?: string | null;
 }
 
 interface BackendRuntimeDescriptor {
@@ -83,13 +85,16 @@ type AsyncSubmitResult = AsyncSubmitSuccess | AsyncSubmitHttpError | AsyncSubmit
 const KIMINA_LEAN_SERVER_URL = process.env.KIMINA_SERVER_URL || 'http://localhost:10000';
 const KIMINA_SERVER_API_KEY = process.env.KIMINA_SERVER_API_KEY?.trim() ?? '';
 const NODE_ENV = process.env.NODE_ENV;
-const DEFAULT_SYNC_TIMEOUT_MS = 2500;
-const DEFAULT_ASYNC_SUBMIT_TIMEOUT_MS = 10000;
-const DEFAULT_POLL_TIMEOUT_MS = 5000;
+const DEFAULT_PROOF_TIMEOUT_SEC = 300;
+const DEFAULT_SYNC_TIMEOUT_MS = 60000;
+const DEFAULT_ASYNC_SUBMIT_TIMEOUT_MS = 15000;
+const DEFAULT_POLL_TIMEOUT_MS = 15000;
 const DEFAULT_WARMUP_RETRY_WINDOW_MS = 8000;
 const DEFAULT_WARMUP_RETRY_DELAY_MS = 750;
 const RUNTIME_WARMING_MESSAGE =
   'Verification server is waking the selected runtime. Please try again in a few seconds.';
+const EXPIRED_JOB_MESSAGE =
+  'Verification job expired or is no longer available. Please resubmit your proof.';
 
 const DEFAULT_ROUTE_CONFIG: VerifyRouteConfig = {
   backendUrl: KIMINA_LEAN_SERVER_URL,
@@ -140,6 +145,19 @@ function buildConfigErrorResponse(error: string): VerifyRouteResponse {
 
 function buildWarmupErrorResponse(): VerifyRouteResponse {
   return buildConfigErrorResponse(RUNTIME_WARMING_MESSAGE);
+}
+
+function buildExpiredJobResponse(jobId: string): VerifyRouteResponse {
+  return {
+    body: {
+      jobId,
+      status: 'expired',
+      error: EXPIRED_JOB_MESSAGE,
+      result: null,
+      expiresAt: null,
+    },
+    status: 200,
+  };
 }
 
 function buildGenericErrorMessage(error: unknown, backendUrl: string): string {
@@ -193,6 +211,22 @@ function isAsyncQueueDisabledError(status: number, errorText: string): boolean {
     status === 503 &&
     normalizeErrorText(errorText).includes('Async queue API is not enabled on this service')
   );
+}
+
+function shouldFallbackToSync(asyncResult: AsyncSubmitResult): boolean {
+  if (asyncResult.kind === 'network_error') {
+    return true;
+  }
+
+  if (asyncResult.kind !== 'http_error') {
+    return false;
+  }
+
+  if (isAsyncQueueDisabledError(asyncResult.status, asyncResult.errorText)) {
+    return true;
+  }
+
+  return asyncResult.status >= 500;
 }
 
 function buildUpstreamHttpError(prefix: string, status: number, errorText: string): string {
@@ -363,10 +397,43 @@ export async function handleVerifyPost(
           code,
         },
       ],
+      timeout: DEFAULT_PROOF_TIMEOUT_SEC,
       runtime_id: runtimeId,
       reuse: false,
     };
     const headers = buildBackendHeaders(config.apiKey);
+    const submitResult = await runAsyncSubmit(
+      backendUrl,
+      headers,
+      payload,
+      config.asyncSubmitTimeoutMs ?? DEFAULT_ASYNC_SUBMIT_TIMEOUT_MS
+    );
+
+    if (submitResult.kind === 'success') {
+      const submit = submitResult.payload;
+      return {
+        body: {
+          jobId: submit.job_id,
+          status: submit.status,
+          runtimeId,
+          result: null,
+          error: null,
+          expiresAt: submit.expires_at ?? null,
+        },
+        status: 200,
+      };
+    }
+
+    if (submitResult.kind === 'http_error' && !shouldFallbackToSync(submitResult)) {
+      return buildConfigErrorResponse(
+        buildUpstreamHttpError('Async submit failed', submitResult.status, submitResult.errorText)
+      );
+    }
+
+    if (submitResult.kind === 'network_error' && !shouldFallbackToSync(submitResult)) {
+      return buildConfigErrorResponse(submitResult.errorMessage);
+    }
+
     const syncResult = await runSyncCheck(
       backendUrl,
       headers,
@@ -390,24 +457,7 @@ export async function handleVerifyPost(
       return buildConfigErrorResponse(syncResult.errorMessage);
     }
 
-    if (!isGatewayColdStartError(syncResult.status, syncResult.errorText)) {
-      return buildConfigErrorResponse(
-        buildUpstreamHttpError('Sync verification failed', syncResult.status, syncResult.errorText)
-      );
-    }
-
-    const submitResult = await runAsyncSubmit(
-      backendUrl,
-      headers,
-      payload,
-      config.asyncSubmitTimeoutMs ?? DEFAULT_ASYNC_SUBMIT_TIMEOUT_MS
-    );
-
-    if (
-      submitResult.kind === 'network_error' ||
-      (submitResult.kind === 'http_error' &&
-        isAsyncQueueDisabledError(submitResult.status, submitResult.errorText))
-    ) {
+    if (isGatewayColdStartError(syncResult.status, syncResult.errorText)) {
       const warmupResult = await retrySyncUntilWarm(backendUrl, headers, payload, config);
       if (warmupResult === 'warmup_timeout') {
         return buildWarmupErrorResponse();
@@ -435,23 +485,9 @@ export async function handleVerifyPost(
       );
     }
 
-    if (submitResult.kind === 'http_error') {
-      return buildConfigErrorResponse(
-        buildUpstreamHttpError('Async submit failed', submitResult.status, submitResult.errorText)
-      );
-    }
-
-    const submit = submitResult.payload;
-    return {
-      body: {
-        jobId: submit.job_id,
-        status: submit.status,
-        runtimeId,
-        result: null,
-        error: null,
-      },
-      status: 200,
-    };
+    return buildConfigErrorResponse(
+      buildUpstreamHttpError('Sync verification failed', syncResult.status, syncResult.errorText)
+    );
   } catch (error) {
     return buildConfigErrorResponse(
       buildGenericErrorMessage(error, normalizeBackendUrl(config.backendUrl))
@@ -470,7 +506,7 @@ export async function handleVerifyPoll(
     }
 
     const backendUrl = normalizeBackendUrl(config.backendUrl);
-    const response = await fetch(`${backendUrl}/api/async/check/${jobId}?wait_sec=1`, {
+    const response = await fetch(`${backendUrl}/api/async/check/${jobId}?wait_sec=5`, {
       method: 'GET',
       headers: buildBackendHeaders(config.apiKey),
       signal: AbortSignal.timeout(config.pollTimeoutMs ?? DEFAULT_POLL_TIMEOUT_MS),
@@ -478,7 +514,19 @@ export async function handleVerifyPoll(
 
     if (!response.ok) {
       const errorText = await response.text();
-      return buildConfigErrorResponse(`Async poll failed: ${response.status} - ${errorText}`);
+      if (response.status === 404) {
+        return buildExpiredJobResponse(jobId);
+      }
+      return {
+        body: {
+          jobId,
+          status: 'failed',
+          error: buildUpstreamHttpError('Async poll failed', response.status, errorText),
+          result: null,
+          expiresAt: null,
+        },
+        status: 200,
+      };
     }
 
     const poll = (await response.json()) as BackendAsyncPollResponse;
@@ -491,18 +539,20 @@ export async function handleVerifyPoll(
             results: poll.results as AdaptVerificationPayload['results'],
           }),
           error: poll.error ?? null,
+          expiresAt: poll.expires_at ?? null,
         },
         status: 200,
       };
     }
 
-    if (poll.status === 'failed') {
+    if (poll.status === 'failed' || poll.status === 'expired') {
       return {
         body: {
           jobId: poll.job_id,
-          status: 'failed',
-          error: poll.error ?? 'Verification job failed.',
+          status: poll.status,
+          error: poll.status === 'expired' ? EXPIRED_JOB_MESSAGE : poll.error ?? 'Verification job failed.',
           result: null,
+          expiresAt: poll.expires_at ?? null,
         },
         status: 200,
       };
@@ -514,6 +564,7 @@ export async function handleVerifyPoll(
         status: poll.status,
         result: null,
         error: poll.error ?? null,
+        expiresAt: poll.expires_at ?? null,
       },
       status: 200,
     };
