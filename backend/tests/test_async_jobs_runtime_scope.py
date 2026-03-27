@@ -7,30 +7,30 @@ from server.async_jobs import InMemoryAsyncJobs
 
 
 @pytest.mark.asyncio
-async def test_in_memory_async_jobs_dequeue_is_runtime_scoped() -> None:
+async def test_in_memory_async_jobs_dequeue_preserves_v415_runtime_identity() -> None:
     jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
 
     await jobs.submit(
         CheckRequest(
-            snippets=[Snippet(id="old", code="import Mathlib\n#check Nat")],
+            snippets=[Snippet(id="first", code="import Mathlib\n#check Nat")],
             timeout=30,
-            runtime_id="v4.9.0",
+            runtime_id="v4.15.0",
         )
     )
     await jobs.submit(
         CheckRequest(
-            snippets=[Snippet(id="new", code="import Mathlib\n#check Int")],
+            snippets=[Snippet(id="second", code="import Mathlib\n#check Int")],
             timeout=30,
             runtime_id="v4.15.0",
         )
     )
 
-    old_task = await jobs.dequeue_task(timeout_sec=1, runtime_id="v4.9.0")
-    new_task = await jobs.dequeue_task(timeout_sec=1, runtime_id="v4.15.0")
+    first_task = await jobs.dequeue_task(timeout_sec=1, runtime_id="v4.15.0")
+    second_task = await jobs.dequeue_task(timeout_sec=1, runtime_id="v4.15.0")
 
-    assert old_task is not None
-    assert new_task is not None
-    assert old_task.runtime_id == "v4.9.0"
-    assert new_task.runtime_id == "v4.15.0"
-    assert old_task.snippet.id == "old"
-    assert new_task.snippet.id == "new"
+    assert first_task is not None
+    assert second_task is not None
+    assert first_task.runtime_id == "v4.15.0"
+    assert second_task.runtime_id == "v4.15.0"
+    assert first_task.snippet.id == "first"
+    assert second_task.snippet.id == "second"

@@ -87,23 +87,4 @@ install_repo() {
 
 install_repo repl "$REPL_REPO_URL" "$REPL_BRANCH" false
 
-# Cherry-pick EOL flush commit for v4.9.0 and under.
-if version_lte "$REPL_BRANCH" "v4.9.0"; then
-  echo "Applying commit 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4 for $REPL_BRANCH (<=v4.9.0)..."
-  pushd repl
-    if git fetch origin 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4 >/dev/null 2>&1; then
-      if git merge-base --is-ancestor 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4 HEAD; then
-        echo "Legacy flush patch already present for $REPL_BRANCH"
-      else
-        git config user.name "Lean UI Builder"
-        git config user.email "builder@lean-ui.invalid"
-        git cherry-pick 4fc1e6d1dda170e8f0a6b698dd5f7e17a9cf52b4
-      fi
-    else
-      echo "Legacy flush patch commit is unavailable upstream; continuing without it"
-    fi
-    lake build
-  popd
-fi
-
 install_repo mathlib4 "$MATHLIB_REPO_URL" "$MATHLIB_BRANCH" true

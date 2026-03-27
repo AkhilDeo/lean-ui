@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { VerificationResult } from '@/types/verification';
+import { normalizeStoredHistory } from './verificationHistoryStorage';
 
 const STORAGE_KEY = 'lean-verification-history';
 
@@ -14,11 +15,7 @@ export function useVerificationHistory() {
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
-        const withDates = parsed.map((item: VerificationResult) => ({
-          ...item,
-          timestamp: new Date(item.timestamp),
-        }));
-        setHistory(withDates);
+        setHistory(normalizeStoredHistory(parsed as VerificationResult[]));
       } catch (e) {
         console.error('Failed to parse history:', e);
         setHistory([]);

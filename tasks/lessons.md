@@ -12,6 +12,11 @@ Capture a new entry after every user correction.
 ## Entries
 - Add newest entries at the top.
 - Date: 2026-03-27
+- Correction received: Remove Lean `v4.9.0` completely and standardize the product on Lean `v4.15.0` only.
+- Root cause: I had narrowed the runtime contract to two versions but still left `v4.9.0` embedded in the registry, tests, persisted UI state, and deployment tooling instead of collapsing the product fully to one runtime.
+- New preventive rule: When the user collapses runtime support to one version, remove every other runtime from the full contract: registry, persisted client state, tests, setup scripts, rollout tooling, and live infrastructure.
+- Where applied: `tasks/lessons.md`, the single-runtime registry and UI cleanup, the `v4.9.0` history purge, test updates, and the Railway decommissioning of `lean-ui-v490`.
+- Date: 2026-03-27
 - Correction received: Long proofs must not die on short timeouts, and the UI must fully support durable async verification with a real Redis-backed queue instead of a broken pseudo-async setup.
 - Root cause: I optimized around the short sync-path timeout and then disabled async in production to recover service health, which fixed the outage but violated the product requirement for long-running proofs and durable async UX.
 - New preventive rule: When proof workloads can be long-running, treat async infrastructure and long-job UX as first-class product requirements: size timeouts for real proof duration, preserve in-flight jobs across reloads, and never leave production on an "enabled but unhealthy" queue path.

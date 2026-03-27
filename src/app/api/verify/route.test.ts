@@ -106,7 +106,7 @@ test('falls back to sync verification when async submit is disabled and sync suc
     );
   }) as typeof fetch;
 
-  const response = await handleVerifyPost(createVerifyRequest('import Mathlib', 'v4.9.0'), {
+  const response = await handleVerifyPost(createVerifyRequest('import Mathlib', 'v4.15.0'), {
     backendUrl: 'https://lean-ui-production.up.railway.app',
     apiKey: 'test-secret',
     hasExplicitServerUrl: true,
@@ -120,7 +120,7 @@ test('falls back to sync verification when async submit is disabled and sync suc
   assert.deepEqual(response.body, {
     jobId: null,
     status: 'completed',
-    runtimeId: 'v4.9.0',
+    runtimeId: 'v4.15.0',
     result: {
       error: null,
       infos: [],
@@ -358,12 +358,6 @@ test('returns the runtime registry for the frontend picker', async (t) => {
         default_runtime_id: 'v4.15.0',
         runtimes: [
           {
-            runtime_id: 'v4.9.0',
-            display_name: 'Mathlib 4.9.0',
-            lean_version: 'v4.9.0',
-            is_default: false,
-          },
-          {
             runtime_id: 'v4.15.0',
             display_name: 'Mathlib 4.15.0',
             lean_version: 'v4.15.0',
@@ -385,17 +379,48 @@ test('returns the runtime registry for the frontend picker', async (t) => {
     defaultRuntimeId: 'v4.15.0',
     runtimes: [
       {
-        runtimeId: 'v4.9.0',
-        displayName: 'Mathlib 4.9.0',
-        leanVersion: '4.9.0',
-        isDefault: false,
-      },
-      {
         runtimeId: 'v4.15.0',
         displayName: 'Mathlib 4.15.0',
         leanVersion: '4.15.0',
         isDefault: true,
       },
     ],
+  });
+});
+
+test('returns an explicit upstream error for removed runtimes', async (t) => {
+  const originalFetch = global.fetch;
+
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  global.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        detail: 'Unknown runtime_id: v4.9.0',
+      }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    )) as typeof fetch;
+
+  const response = await handleVerifyPost(createVerifyRequest('import Mathlib', 'v4.9.0'), {
+    backendUrl: 'https://lean-ui-production.up.railway.app',
+    apiKey: 'test-secret',
+    hasExplicitServerUrl: true,
+    isProduction: true,
+  });
+
+  assert.deepEqual(response.body, {
+    jobId: null,
+    status: 'failed',
+    error: 'Async submit failed: 400 - Unknown runtime_id: v4.9.0',
+    result: {
+      status: 'server_error',
+      passed: false,
+      error: 'Async submit failed: 400 - Unknown runtime_id: v4.9.0',
+      warnings: [],
+      infos: [],
+      time: 0,
+    },
   });
 });

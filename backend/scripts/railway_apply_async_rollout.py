@@ -27,9 +27,9 @@ REDIS_SERVICE_NAME = "lean-ui-redis"
 REDIS_TEMPLATE_ID = "895cb7c9-8ea9-4407-b4b6-b5013a65145e"
 DEFAULT_RUNTIME_ID = "v4.15.0"
 API_URL = "https://backboard.railway.com/graphql/v2"
+REMOVED_RUNTIME_IDS = ("v4.9.0",)
 
 RUNTIME_SERVICE_NAMES = {
-    "v4.9.0": "lean-ui-v490",
     "v4.15.0": "lean-ui-v4150",
 }
 
@@ -358,6 +358,9 @@ def configure_gateway_service(
     for runtime_id in seeded_runtime_ids():
         gateway_vars[runtime_env_key(runtime_id, "SERVICE_ID")] = runtime_service_ids[runtime_id]
         gateway_vars[runtime_env_key(runtime_id, "BASE_URL")] = runtime_service_urls[runtime_id]
+    for runtime_id in REMOVED_RUNTIME_IDS:
+        gateway_vars[runtime_env_key(runtime_id, "SERVICE_ID")] = ""
+        gateway_vars[runtime_env_key(runtime_id, "BASE_URL")] = ""
 
     upsert_variables(client, service_id=GATEWAY_SERVICE_ID, variables=gateway_vars)
 

@@ -14,11 +14,7 @@ def test_runtime_registry_seeds_curated_versions_with_415_default() -> None:
     registry = build_runtime_registry("v4.15.0")
 
     assert registry.default_runtime_id == "v4.15.0"
-    assert registry.known_runtime_ids() == [
-        "v4.9.0",
-        "v4.15.0",
-    ]
-    assert registry.require("v4.9.0").display_name == "Mathlib 4.9.0"
+    assert registry.known_runtime_ids() == ["v4.15.0"]
     assert registry.require("v4.15.0").is_default is True
 
 
@@ -68,7 +64,7 @@ def test_embedded_runtime_validation_rejects_version_mismatch() -> None:
     settings.async_enabled = True
     settings.embedded_worker_enabled = True
     settings.runtime_id = "v4.15.0"
-    settings.lean_version = "v4.9.0"
+    settings.lean_version = "v4.28.0"
     settings.runtime_service_id = "runtime-service"
     settings.railway_environment_id = "railway-env"
     settings.init_repls = {}

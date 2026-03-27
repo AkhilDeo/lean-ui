@@ -46,9 +46,8 @@ def test_gateway_runtimes_endpoint_exposes_registry(monkeypatch) -> None:  # typ
         assert response.status_code == 200
         body = response.json()
         assert body["default_runtime_id"] == "v4.15.0"
-        assert any(runtime["runtime_id"] == "v4.9.0" for runtime in body["runtimes"])
         assert any(runtime["runtime_id"] == "v4.15.0" for runtime in body["runtimes"])
-        assert len(body["runtimes"]) == 2
+        assert len(body["runtimes"]) == 1
 
 
 def test_gateway_sync_check_proxies_to_warm_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -114,11 +113,28 @@ def test_gateway_sync_check_wakes_cold_runtime(monkeypatch) -> None:  # type: ig
             "/api/check",
             json={
                 "snippets": [{"id": "verification", "code": "#check Nat"}],
-                "runtime_id": "v4.9.0",
+                "runtime_id": "v4.15.0",
             },
         )
         assert response.status_code == 503
-        assert calls == ["v4.9.0"]
+        assert calls == ["v4.15.0"]
+
+
+def test_gateway_sync_check_rejects_removed_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _seed_gateway_runtime_env(monkeypatch)
+    app = create_app(_gateway_app())
+
+    with TestClient(app, base_url="http://testserver") as client:
+        client.headers.update({"Authorization": "Bearer test-key"})
+        response = client.post(
+            "/api/check",
+            json={
+                "snippets": [{"id": "verification", "code": "#check Nat"}],
+                "runtime_id": "v4.9.0",
+            },
+        )
+        assert response.status_code == 400
+        assert response.json() == {"detail": "Unknown runtime_id: v4.9.0"}
 
 
 @pytest.mark.asyncio

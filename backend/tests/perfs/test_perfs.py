@@ -24,7 +24,7 @@ async def test_goedel(perf_rows: int, perf_shuffle: bool) -> None:
 
     ds = load_dataset(
         "Goedel-LM/Lean-workbook-proofs", split="train"
-    )  # Goedel is on v4.9.0, some proofs aren't valid in later versions.
+    )  # Some historical proofs may not be valid on the current supported runtime.
     if perf_shuffle:
         ds = ds.shuffle(seed=0)
     if perf_rows:

@@ -5,9 +5,8 @@ This backend now runs in two service modes on Railway:
 - `gateway`: always-on API service that validates runtime ids, proxies warm sync checks, wakes cold runtimes, and serves async job status.
 - `runtime`: one service per seeded Lean/Mathlib runtime. Each runtime serves `/api/check`, drains only its own async work, and scales back to zero when idle.
 
-## Seeded runtimes
+## Seeded runtime
 
-- `v4.9.0`
 - `v4.15.0`
 
 ## Gateway service
@@ -28,8 +27,6 @@ LEAN_SERVER_API_KEY=<shared-api-key>
 Required per-runtime Railway wiring:
 
 ```sh
-LEAN_SERVER_RUNTIME_V4_9_0_SERVICE_ID=<service-id>
-LEAN_SERVER_RUNTIME_V4_9_0_BASE_URL=<private-url>
 LEAN_SERVER_RUNTIME_V4_15_0_SERVICE_ID=<service-id>
 LEAN_SERVER_RUNTIME_V4_15_0_BASE_URL=<private-url>
 ```

@@ -15,7 +15,7 @@ def test_missing_keys_utility() -> None:
 def test_gateway_role_requires_seeded_runtime_service_ids_and_base_urls() -> None:
     required = required_keys_for_role("gateway")
     assert "LEAN_SERVER_RAILWAY_ENVIRONMENT_ID" in required
-    assert "LEAN_SERVER_RUNTIME_V4_9_0_SERVICE_ID" in required
+    assert "LEAN_SERVER_RUNTIME_V4_15_0_SERVICE_ID" in required
     assert "LEAN_SERVER_RUNTIME_V4_15_0_BASE_URL" in required
 
 

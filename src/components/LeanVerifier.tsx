@@ -26,8 +26,8 @@ import { Play, Loader2, Code2, Sparkles, ChevronDown } from 'lucide-react';
 import { generateRandomName } from '@/lib/nameGenerator';
 
 const DEFAULT_CODE = `-- Welcome to Lean Verifier!
--- Supported runtimes: Lean 4.15.0 and Lean 4.9.0.
--- Pick a Lean runtime, write your code, and verify it.
+-- Supported runtime: Lean 4.15.0.
+-- Write your code and verify it asynchronously.
 
 theorem hello_world : 1 + 1 = 2 := by
   rfl
@@ -559,7 +559,7 @@ export function LeanVerifier() {
               <div className="min-w-0">
                 <h1 className="text-lg font-bold">Lean Runtime Gateway</h1>
                 <p className="text-xs text-muted-foreground">
-                  Async-first verification across Lean 4 runtimes
+                  Async-first verification for Lean 4.15.0
                 </p>
               </div>
             </div>

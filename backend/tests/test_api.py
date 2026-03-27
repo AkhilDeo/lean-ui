@@ -148,7 +148,7 @@ async def test_mathlib(client: TestClient) -> None:
 
     assert_json_equal(resp1.json(), expected, ignore_keys=["time", "diagnostics"])
 
-    max_reuse_time = 5 if settings.lean_version in {"v4.15.0", "v4.9.0"} else 1
+    max_reuse_time = 5 if settings.lean_version == "v4.15.0" else 1
     assert resp1.json()["results"][0]["time"] < max_reuse_time
 
 
@@ -204,24 +204,6 @@ async def test_timeout(client: TestClient) -> None:
     assert resp.json()["results"][0]["diagnostics"]["repl_uuid"] != used_repl_uuid
 
     expecteds = {
-        "v4.9.0": CheckResponse(
-            results=[
-                ReplResponse(
-                    id=uuid,
-                    response=CommandResponse(
-                        env=0,
-                        messages=[
-                            Message(
-                                severity="info",
-                                pos={"line": 1, "column": 0},
-                                endPos={"line": 1, "column": 42},
-                                data="Goals accomplished!",
-                            )
-                        ],
-                    ),
-                )
-            ]
-        ).model_dump(exclude_none=True),
         "v4.15.0": CheckResponse(
             results=[
                 ReplResponse(
