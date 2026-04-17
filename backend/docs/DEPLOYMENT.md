@@ -3,7 +3,7 @@
 This backend now runs in two service modes on Railway:
 
 - `gateway`: always-on API service that validates runtime ids, proxies warm sync checks, wakes cold runtimes, and serves async job status.
-- `runtime`: one service per seeded Lean/Mathlib runtime. Each runtime serves `/api/check`, drains only its own async work, and scales back to zero when idle.
+- `runtime`: one service per seeded Lean/Mathlib runtime. Each runtime serves `/api/check` and drains only its own async work. The default runtime stays warm; the non-default runtimes use Railway Serverless so they can sleep when idle and wake on traffic.
 
 ## Seeded runtimes
 
@@ -64,11 +64,15 @@ LEAN_SERVER_REDIS_URL=<shared-redis-url>
 LEAN_SERVER_API_KEY=<shared-api-key>
 LEAN_SERVER_AUTOSCALE_RAILWAY_TOKEN=<railway-api-token>
 LEAN_SERVER_INIT_REPLS={}
-LEAN_SERVER_RUNTIME_IDLE_TTL_SEC=300
 LEAN_SERVER_ASYNC_RESULT_TTL_SEC=3600
 ```
 
 The runtime will fail fast if `LEAN_SERVER_RUNTIME_ID`, `LEAN_SERVER_RUNTIME_SERVICE_ID`, or `LEAN_SERVER_RAILWAY_ENVIRONMENT_ID` is missing, if `LEAN_SERVER_LEAN_VERSION` does not match the runtime id, or if `LEAN_SERVER_INIT_REPLS` is non-empty while the embedded worker is enabled.
+
+Recommended runtime posture:
+
+- `v4.9.0`: keep Railway Serverless disabled so one service replica stays warm, set `LEAN_SERVER_MAX_REPLS=4`, `LEAN_SERVER_ASYNC_WORKER_CONCURRENCY=2`, and keep only a small warm pool.
+- non-default runtimes: enable Railway Serverless so Railway sleeps the service when idle and wakes it on private-network traffic from the gateway; keep `LEAN_SERVER_MAX_REPLS=1` and `LEAN_SERVER_ASYNC_WORKER_CONCURRENCY=1`.
 
 ## Validation
 

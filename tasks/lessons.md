@@ -12,6 +12,11 @@ Capture a new entry after every user correction.
 ## Entries
 - Add newest entries at the top.
 - Date: 2026-04-17
+- Correction received: Keep Lean `v4.9.0` warm by default and do not throttle the primary runtime to a single worker / single REPL; use Railway's native sleep behavior for the colder runtimes instead of replica-to-zero hacks.
+- Root cause: I carried a conservative cost-cutting rollout too far by pinning the default runtime to `MAX_REPLS=1` and relying on custom replica-count scale-down logic without validating Railway's current Serverless behavior or the live queueing impact.
+- New preventive rule: When optimizing cost on Railway, use Railway's native Serverless/App Sleeping behavior for cold services, keep the default hot path explicitly warm when UX matters, and never force the primary runtime to a single REPL lane unless live traffic proves it is sufficient.
+- Where applied: `tasks/lessons.md`, the runtime wake/sleep implementation, the Railway rollout script, deployment docs, and the default `v4.9.0` capacity settings.
+- Date: 2026-04-17
 - Correction received: Restore multi-runtime support with Lean `v4.9.0`, `v4.15.0`, `v4.24.0`, `v4.27.0`, and `v4.28.0`, make `v4.9.0` the default, and keep the backend cheap by using cold-started per-runtime services that can spin down.
 - Root cause: I had previously collapsed the runtime contract too aggressively around `v4.15.0` and treated the single-runtime rollout as the lasting product direction instead of a reversible scope decision.
 - New preventive rule: When the user re-expands runtime support after a contraction, restore the full contract end-to-end again: registry, defaults, picker state, async routing, deployment wiring, retention policy, and live infrastructure naming.

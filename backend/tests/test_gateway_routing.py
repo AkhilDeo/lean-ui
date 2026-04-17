@@ -194,6 +194,26 @@ async def test_gateway_runtime_warm_check_accepts_ready_health(monkeypatch) -> N
         assert await gateway.is_runtime_warm(runtime) is True
 
 
+@pytest.mark.asyncio
+async def test_gateway_wake_runtime_uses_health_ping(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _seed_gateway_runtime_env(monkeypatch)
+    app = create_app(_gateway_app())
+
+    async with LifespanManager(app):
+        gateway = app.state.runtime_gateway
+        runtime = gateway.require_runtime("v4.15.0")
+        calls: list[tuple[str, float]] = []
+
+        async def fake_get(url, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append((url, kwargs["timeout"]))
+            return httpx.Response(503, json={"status": "starting"})
+
+        monkeypatch.setattr(gateway._http, "get", fake_get)
+        await gateway.wake_runtime(runtime)
+
+        assert calls == [("https://v4.15.0.internal/health", 5.0)]
+
+
 def test_gateway_accepts_restored_multi_runtime_ids(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _seed_gateway_runtime_env(monkeypatch)
     app = create_app(_gateway_app())

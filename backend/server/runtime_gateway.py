@@ -11,6 +11,7 @@ from .runtime_registry import RuntimeDescriptor, RuntimeRegistry
 from .settings import Settings
 
 API_URL = "https://backboard.railway.com/graphql/v2"
+WAKE_PING_TIMEOUT_SEC = 5.0
 
 _UPDATE_REPLICAS_MUTATION = """
 mutation($sid:String!,$eid:String!,$input:ServiceInstanceUpdateInput!) {
@@ -94,6 +95,17 @@ class RuntimeGateway:
         return payload.get("ready") is True
 
     async def wake_runtime(self, runtime: RuntimeDescriptor) -> None:
+        if runtime.base_url:
+            try:
+                await self._http.get(
+                    f"{runtime.base_url.rstrip('/')}/health",
+                    headers=_build_auth_headers(self._settings.api_key),
+                    timeout=WAKE_PING_TIMEOUT_SEC,
+                )
+                logger.info("Issued runtime wake ping for {}", runtime.runtime_id)
+                return
+            except Exception:
+                logger.debug("Runtime wake ping failed for {}", runtime.runtime_id)
         if self._railway is None:
             logger.debug("Skipping runtime wake for {}: no Railway token", runtime.runtime_id)
             return

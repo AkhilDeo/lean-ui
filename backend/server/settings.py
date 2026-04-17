@@ -34,7 +34,6 @@ class Settings(BaseSettings):
     embedded_worker_enabled: bool = False
     gateway_sync_proxy_timeout_sec: int = 300
     gateway_wake_replicas: int = 1
-    runtime_idle_ttl_sec: int = 15 * 60
     runtime_service_id: str | None = None
     runtime_service_name: str = ""
     railway_environment_id: str | None = None
@@ -179,7 +178,6 @@ class Settings(BaseSettings):
         "async_circuit_breaker_pause_sec",
         "gateway_sync_proxy_timeout_sec",
         "gateway_wake_replicas",
-        "runtime_idle_ttl_sec",
     )
     @classmethod
     def _validate_positive_async_ints(cls, v: int) -> int:

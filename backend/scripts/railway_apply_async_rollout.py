@@ -35,6 +35,12 @@ RUNTIME_SERVICE_NAMES = {
     "v4.27.0": "lean-ui-v4270",
     "v4.28.0": "lean-ui-v4280",
 }
+DEFAULT_RUNTIME_MAX_REPLS = "4"
+DEFAULT_RUNTIME_WORKER_CONCURRENCY = "2"
+DEFAULT_RUNTIME_LIGHT_WARM_REPLS = json.dumps({"import Mathlib": 2})
+DEFAULT_RUNTIME_HEAVY_WARM_REPLS = json.dumps(
+    {"import Mathlib": 1, "import Mathlib\nimport Aesop": 1}
+)
 
 
 def load_token() -> str:
@@ -384,6 +390,7 @@ def configure_runtime_service(
     api_key: str,
     autoscale_token: str,
 ) -> None:
+    is_default_runtime = runtime_id == DEFAULT_RUNTIME_ID
     update_service_instance(
         client,
         service_id=service_id,
@@ -391,7 +398,7 @@ def configure_runtime_service(
             "rootDirectory": "/backend",
             "railwayConfigFile": "/backend/railway.toml",
             "startCommand": "python -m server",
-            "sleepApplication": False,
+            "sleepApplication": not is_default_runtime,
             "restartPolicyType": "ON_FAILURE",
             "restartPolicyMaxRetries": 3,
             "multiRegionConfig": {REGION: {"numReplicas": 1}},
@@ -413,14 +420,23 @@ def configure_runtime_service(
             "LEAN_SERVER_LEAN_VERSION": runtime_id,
             "LEAN_SERVER_RUNTIME_SERVICE_ID": service_id,
             "LEAN_SERVER_RAILWAY_ENVIRONMENT_ID": ENVIRONMENT_ID,
-            "LEAN_SERVER_MAX_REPLS": "1",
+            "LEAN_SERVER_MAX_REPLS": DEFAULT_RUNTIME_MAX_REPLS if is_default_runtime else "1",
             "LEAN_SERVER_MAX_REPL_MEM": "8G",
             "LEAN_SERVER_INIT_REPLS": "{}",
-            "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY": "1",
+            "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY": (
+                DEFAULT_RUNTIME_WORKER_CONCURRENCY if is_default_runtime else "1"
+            ),
             "LEAN_SERVER_ASYNC_WORKER_QUEUE_TIER": "all",
             "LEAN_SERVER_ASYNC_LIGHT_RETRY_ATTEMPTS": "5",
             "LEAN_SERVER_ASYNC_HEAVY_RETRY_ATTEMPTS": "7",
-            "LEAN_SERVER_RUNTIME_IDLE_TTL_SEC": "300",
+            "LEAN_SERVER_ASYNC_LIGHT_WARM_REPLS": (
+                DEFAULT_RUNTIME_LIGHT_WARM_REPLS if is_default_runtime else '{"import Mathlib": 1}'
+            ),
+            "LEAN_SERVER_ASYNC_HEAVY_WARM_REPLS": (
+                DEFAULT_RUNTIME_HEAVY_WARM_REPLS
+                if is_default_runtime
+                else '{"import Mathlib": 1, "import Mathlib\\nimport Aesop": 1}'
+            ),
         }
     )
     upsert_variables(client, service_id=service_id, variables=runtime_vars)

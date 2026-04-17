@@ -19,7 +19,6 @@ from .routers.health import router as health_router
 from .routers.runtimes import router as runtimes_router
 from .runtime_gateway import RuntimeGateway
 from .runtime_registry import build_runtime_registry, validate_runtime_configuration
-from .runtime_scaler import RuntimeIdleScaler
 from .settings import Environment, Settings
 from .worker import run_worker
 
@@ -153,16 +152,9 @@ def create_app(settings: Settings) -> FastAPI:
             else:
                 app.state.embedded_worker_task = None
 
-            if settings.async_enabled:
-                runtime_scaler = RuntimeIdleScaler(settings, app.state.async_jobs)
-                await runtime_scaler.start()
-                app.state.runtime_scaler = runtime_scaler
-            else:
-                app.state.runtime_scaler = None
         else:
             app.state.manager = None
             app.state.embedded_worker_task = None
-            app.state.runtime_scaler = None
 
         if settings.environment == Environment.dev:
             threading.Timer(
@@ -182,10 +174,6 @@ def create_app(settings: Settings) -> FastAPI:
             ).start()
 
         yield
-
-        runtime_scaler = getattr(app.state, "runtime_scaler", None)
-        if runtime_scaler is not None:
-            await runtime_scaler.stop()
 
         if runtime_readiness_task is not None:
             runtime_readiness_task.cancel()

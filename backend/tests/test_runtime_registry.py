@@ -10,7 +10,7 @@ from server.runtime_registry import (
 from server.settings import Settings
 
 
-def test_runtime_registry_seeds_curated_versions_with_415_default() -> None:
+def test_runtime_registry_seeds_curated_versions_with_490_default() -> None:
     registry = build_runtime_registry("v4.9.0")
 
     assert registry.default_runtime_id == "v4.9.0"
