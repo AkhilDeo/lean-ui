@@ -19,7 +19,7 @@ from ..auth import require_key
 from ..request_policy import normalize_check_request
 from ..runtime_gateway import RuntimeGateway
 from ..settings import Settings
-from .check import get_runtime_settings
+from .check import ensure_runtime_request_allowed, get_runtime_settings
 
 router = APIRouter()
 
@@ -60,6 +60,7 @@ async def submit_async_check(
 ) -> AsyncSubmitResponse:
     normalized_payload = normalize_check_request(payload, runtime_settings)
     runtime_id = normalized_payload.runtime_id or runtime_settings.default_runtime_id
+    ensure_runtime_request_allowed(runtime_settings, runtime_id)
     if runtime_gateway is not None:
         runtime = runtime_gateway.require_runtime(runtime_id)
         await runtime_gateway.wake_runtime(runtime)

@@ -1,6 +1,5 @@
 import type { VerificationResult } from '../types/verification.ts';
-
-const SUPPORTED_RUNTIME_IDS = new Set(['v4.15.0']);
+import { isSupportedRuntimeId } from '../lib/runtime-selection.ts';
 
 export function normalizeStoredHistory(
   items: VerificationResult[]
@@ -10,5 +9,5 @@ export function normalizeStoredHistory(
       ...item,
       timestamp: new Date(item.timestamp),
     }))
-    .filter((item) => SUPPORTED_RUNTIME_IDS.has(item.runtimeId));
+    .filter((item) => isSupportedRuntimeId(item.runtimeId));
 }

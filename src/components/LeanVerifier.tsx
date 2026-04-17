@@ -12,6 +12,7 @@ import {
   VerifyApiResponse,
   VerifyJobResponse,
 } from '@/types/verification';
+import { resolveSelectedRuntimeId } from '@/lib/runtime-selection';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -26,8 +27,8 @@ import { Play, Loader2, Code2, Sparkles, ChevronDown } from 'lucide-react';
 import { generateRandomName } from '@/lib/nameGenerator';
 
 const DEFAULT_CODE = `-- Welcome to Lean Verifier!
--- Supported runtime: Lean 4.15.0.
--- Write your code and verify it asynchronously.
+-- Choose a Lean + Mathlib runtime from the picker above.
+-- Verification is async-first, so cold runtimes queue immediately.
 
 theorem hello_world : 1 + 1 = 2 := by
   rfl
@@ -89,7 +90,7 @@ export function LeanVerifier() {
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [isResizing, setIsResizing] = useState(false);
   const [runtimes, setRuntimes] = useState<RuntimeOption[]>([]);
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState('v4.15.0');
+  const [selectedRuntimeId, setSelectedRuntimeId] = useState('');
   const [draftMode, setDraftMode] = useState(false);
   const resizeRef = useRef<HTMLDivElement>(null);
   const activePollsRef = useRef<Set<string>>(new Set());
@@ -443,7 +444,9 @@ export function LeanVerifier() {
           return;
         }
         setRuntimes(payload.runtimes);
-        setSelectedRuntimeId(payload.defaultRuntimeId);
+        setSelectedRuntimeId((currentRuntimeId) =>
+          resolveSelectedRuntimeId(currentRuntimeId, payload.runtimes, payload.defaultRuntimeId)
+        );
       } catch (error) {
         console.error('Failed to load runtimes:', error);
       }
@@ -559,14 +562,14 @@ export function LeanVerifier() {
               <div className="min-w-0">
                 <h1 className="text-lg font-bold">Lean Runtime Gateway</h1>
                 <p className="text-xs text-muted-foreground">
-                  Async-first verification for Lean 4.15.0
+                  Async-first verification across Lean + Mathlib runtimes
                 </p>
               </div>
             </div>
             <div className="ml-auto flex flex-1 flex-wrap items-center justify-end gap-3">
               <div className="relative min-w-[12rem] flex-1 basis-[12rem] sm:max-w-56 sm:flex-none">
                 <select
-                  value={selectedRuntimeId}
+                  value={selectedRuntimeId || selectedRuntime?.runtimeId || ''}
                   onChange={(e) => setSelectedRuntimeId(e.target.value)}
                   className="h-9 w-full appearance-none rounded-md border border-input bg-background/70 pl-3 pr-10 text-sm leading-none shadow-xs outline-none transition-[border-color,box-shadow,background-color] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50"
                 >

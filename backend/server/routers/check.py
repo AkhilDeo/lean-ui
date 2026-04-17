@@ -42,6 +42,19 @@ def get_runtime_gateway(request: Request) -> RuntimeGateway | None:
     return cast(RuntimeGateway | None, getattr(request.app.state, "runtime_gateway", None))
 
 
+def ensure_runtime_request_allowed(runtime_settings: Settings, runtime_id: str) -> None:
+    if runtime_settings.gateway_enabled:
+        return
+    if runtime_id != runtime_settings.runtime_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Runtime service for {runtime_settings.runtime_id} "
+                f"cannot serve runtime_id: {runtime_id}"
+            ),
+        )
+
+
 def _shift_line(pos: Pos | None, offset: int) -> None:
     if not pos:
         return
@@ -253,6 +266,7 @@ async def check(
     _: str = Depends(require_key),
 ) -> CheckResponse:
     normalized_request = normalize_check_request(request, runtime_settings)
+    ensure_runtime_request_allowed(runtime_settings, normalized_request.runtime_id or "")
 
     if runtime_settings.gateway_enabled:
         if runtime_gateway is None:

@@ -81,7 +81,7 @@ cd backend && docker compose down
 
 ### Basic Workflow
 
-1. **Pick a Runtime** - Choose a supported Lean 4 + Mathlib runtime (default: Lean 4.28)
+1. **Pick a Runtime** - Choose a supported Lean 4 + Mathlib runtime (default: Lean 4.9.0)
 2. **Write Lean Code** - Enter your Lean code in the Monaco editor
 3. **Add Title (Optional)** - Give your verification a descriptive name, or let it auto-generate
 4. **Click Verify** - Submit your code for verification
@@ -116,14 +116,14 @@ Create a `.env.local` file in the root directory (optional):
 
 ### Backend Configuration
 
-The backend defaults to Lean 4.15.0. The supported runtimes are Lean 4.15.0 and Lean 4.9.0. Runtime routing is driven by the backend registry. To customize a local runtime service, edit `backend/.env`:
+The backend defaults to Lean 4.9.0. The supported runtimes are Lean 4.9.0, Lean 4.15.0, Lean 4.24.0, Lean 4.27.0, and Lean 4.28.0. Runtime routing is driven by the backend registry. To customize a local runtime service, edit `backend/.env`:
 
 ```bash
 KIMINA_SERVER_URL=https://lean-ui-production.up.railway.app
 KIMINA_SERVER_API_KEY=your-shared-backend-key
 
-LEAN_SERVER_LEAN_VERSION=v4.15.0  # Runtime Lean version
-LEAN_SERVER_RUNTIME_ID=v4.15.0    # Runtime registry id
+LEAN_SERVER_LEAN_VERSION=v4.9.0   # Runtime Lean version
+LEAN_SERVER_RUNTIME_ID=v4.9.0     # Runtime registry id
 LEAN_SERVER_MAX_REPLS=14           # Max concurrent REPL instances
 LEAN_SERVER_MAX_WAIT=60            # Max wait time in seconds
 ```

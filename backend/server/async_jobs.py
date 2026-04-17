@@ -208,7 +208,9 @@ def _queue_name(base_name: str, runtime_id: str) -> str:
 
 
 def _known_runtime_ids(settings: Settings) -> list[str]:
-    return build_runtime_registry(settings.default_runtime_id).known_runtime_ids()
+    if settings.gateway_enabled:
+        return build_runtime_registry(settings.default_runtime_id).known_runtime_ids()
+    return [settings.runtime_id]
 
 
 @dataclass

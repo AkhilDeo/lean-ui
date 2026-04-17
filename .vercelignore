@@ -1,0 +1,10 @@
+backend
+node_modules
+.next
+.git
+.pytest_cache
+.coverage
+.coverage*
+tasks
+screenshot.png
+tsconfig.tsbuildinfo

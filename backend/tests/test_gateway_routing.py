@@ -23,7 +23,7 @@ def _gateway_app() -> Settings:
     settings.async_use_in_memory_backend = True
     settings.gateway_enabled = True
     settings.runtime_id = "gateway"
-    settings.default_runtime_id = "v4.15.0"
+    settings.default_runtime_id = "v4.9.0"
     settings.railway_environment_id = "railway-env"
     return settings
 
@@ -45,9 +45,14 @@ def test_gateway_runtimes_endpoint_exposes_registry(monkeypatch) -> None:  # typ
         response = client.get("/api/runtimes")
         assert response.status_code == 200
         body = response.json()
-        assert body["default_runtime_id"] == "v4.15.0"
-        assert any(runtime["runtime_id"] == "v4.15.0" for runtime in body["runtimes"])
-        assert len(body["runtimes"]) == 1
+        assert body["default_runtime_id"] == "v4.9.0"
+        assert [runtime["runtime_id"] for runtime in body["runtimes"]] == [
+            "v4.9.0",
+            "v4.15.0",
+            "v4.24.0",
+            "v4.27.0",
+            "v4.28.0",
+        ]
 
 
 def test_gateway_sync_check_proxies_to_warm_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -120,7 +125,7 @@ def test_gateway_sync_check_wakes_cold_runtime(monkeypatch) -> None:  # type: ig
         assert calls == ["v4.15.0"]
 
 
-def test_gateway_sync_check_rejects_removed_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_gateway_sync_check_rejects_unknown_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _seed_gateway_runtime_env(monkeypatch)
     app = create_app(_gateway_app())
 
@@ -130,11 +135,11 @@ def test_gateway_sync_check_rejects_removed_runtime(monkeypatch) -> None:  # typ
             "/api/check",
             json={
                 "snippets": [{"id": "verification", "code": "#check Nat"}],
-                "runtime_id": "v4.9.0",
+                "runtime_id": "v4.99.0",
             },
         )
         assert response.status_code == 400
-        assert response.json() == {"detail": "Unknown runtime_id: v4.9.0"}
+        assert response.json() == {"detail": "Unknown runtime_id: v4.99.0"}
 
 
 @pytest.mark.asyncio
@@ -189,6 +194,42 @@ async def test_gateway_runtime_warm_check_accepts_ready_health(monkeypatch) -> N
         assert await gateway.is_runtime_warm(runtime) is True
 
 
+def test_gateway_accepts_restored_multi_runtime_ids(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _seed_gateway_runtime_env(monkeypatch)
+    app = create_app(_gateway_app())
+
+    with TestClient(app, base_url="http://testserver") as client:
+        client.headers.update({"Authorization": "Bearer test-key"})
+        gateway = app.state.runtime_gateway
+
+        async def fake_is_warm(runtime):  # type: ignore[no-untyped-def]
+            return runtime.runtime_id == "v4.28.0"
+
+        async def fake_proxy(runtime, payload):  # type: ignore[no-untyped-def]
+            assert runtime.runtime_id == "v4.28.0"
+            assert payload["runtime_id"] == "v4.28.0"
+            return CheckResponse(
+                results=[ReplResponse(id="verification", time=0.1, response={"env": 0})]
+            )
+
+        async def fake_wake(runtime):  # type: ignore[no-untyped-def]
+            raise AssertionError(f"did not expect wake for warm runtime {runtime.runtime_id}")
+
+        monkeypatch.setattr(gateway, "is_runtime_warm", fake_is_warm)
+        monkeypatch.setattr(gateway, "proxy_sync_check", fake_proxy)
+        monkeypatch.setattr(gateway, "wake_runtime", fake_wake)
+
+        response = client.post(
+            "/api/check",
+            json={
+                "snippets": [{"id": "verification", "code": "#check Nat"}],
+                "runtime_id": "v4.28.0",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["results"][0]["status"] == "valid"
+
+
 def _runtime_app() -> Settings:
     settings = Settings(_env_file=None)
     settings.environment = Environment.prod
@@ -202,6 +243,75 @@ def _runtime_app() -> Settings:
     settings.max_repl_uses = 1
     settings.init_repls = {}
     return settings
+
+
+def _runtime_async_app() -> Settings:
+    settings = _runtime_app()
+    settings.async_enabled = True
+    settings.async_use_in_memory_backend = True
+    return settings
+
+
+def test_runtime_runtimes_endpoint_exposes_only_service_runtime() -> None:
+    app = create_app(_runtime_app())
+
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.get("/api/runtimes")
+        assert response.status_code == 200
+        assert response.json() == {
+            "default_runtime_id": "v4.15.0",
+            "runtimes": [
+                {
+                    "runtime_id": "v4.15.0",
+                    "display_name": "Mathlib 4.15.0",
+                    "lean_version": "v4.15.0",
+                    "repl_branch": "v4.15.0",
+                    "mathlib_branch": "v4.15.0",
+                    "project_type": "mathlib",
+                    "project_label": "Mathlib",
+                    "service_name": "lean-ui-v4150",
+                    "service_id": None,
+                    "base_url": None,
+                    "is_default": True,
+                }
+            ],
+        }
+
+
+def test_runtime_sync_check_rejects_mismatched_runtime_id() -> None:
+    app = create_app(_runtime_app())
+
+    with TestClient(app, base_url="http://testserver") as client:
+        client.headers.update({"Authorization": "Bearer test-key"})
+        response = client.post(
+            "/api/check",
+            json={
+                "snippets": [{"id": "verification", "code": "#check Nat"}],
+                "runtime_id": "v4.28.0",
+            },
+        )
+        assert response.status_code == 400
+        assert response.json() == {
+            "detail": "Runtime service for v4.15.0 cannot serve runtime_id: v4.28.0"
+        }
+
+
+def test_runtime_async_submit_rejects_mismatched_runtime_id() -> None:
+    app = create_app(_runtime_async_app())
+
+    with TestClient(app, base_url="http://testserver") as client:
+        client.headers.update({"Authorization": "Bearer test-key"})
+        response = client.post(
+            "/api/async/check",
+            json={
+                "snippets": [{"id": "verification", "code": "#check Nat"}],
+                "runtime_id": "v4.28.0",
+            },
+        )
+        assert response.status_code == 400
+        assert response.json() == {
+            "detail": "Runtime service for v4.15.0 cannot serve runtime_id: v4.28.0"
+        }
 
 
 @pytest.mark.asyncio

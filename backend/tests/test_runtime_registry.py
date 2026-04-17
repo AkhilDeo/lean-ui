@@ -11,11 +11,17 @@ from server.settings import Settings
 
 
 def test_runtime_registry_seeds_curated_versions_with_415_default() -> None:
-    registry = build_runtime_registry("v4.15.0")
+    registry = build_runtime_registry("v4.9.0")
 
-    assert registry.default_runtime_id == "v4.15.0"
-    assert registry.known_runtime_ids() == ["v4.15.0"]
-    assert registry.require("v4.15.0").is_default is True
+    assert registry.default_runtime_id == "v4.9.0"
+    assert registry.known_runtime_ids() == [
+        "v4.9.0",
+        "v4.15.0",
+        "v4.24.0",
+        "v4.27.0",
+        "v4.28.0",
+    ]
+    assert registry.require("v4.9.0").is_default is True
 
 
 def test_gateway_runtime_validation_requires_seeded_runtime_wiring() -> None:
@@ -39,7 +45,7 @@ def test_gateway_runtime_validation_accepts_fully_wired_seeded_registry() -> Non
     settings.async_enabled = True
     settings.railway_environment_id = "railway-env"
 
-    registry = build_runtime_registry("v4.15.0", env=env)
+    registry = build_runtime_registry("v4.9.0", env=env)
     validate_runtime_configuration(settings, registry)
 
 

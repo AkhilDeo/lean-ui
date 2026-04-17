@@ -7,7 +7,7 @@ import {
   handleVerifyPost,
 } from '../../../lib/verify-route.ts';
 
-function createVerifyRequest(code = '#check Nat', runtimeId = 'v4.15.0'): Request {
+function createVerifyRequest(code = '#check Nat', runtimeId = 'v4.9.0'): Request {
   return new Request('http://localhost/api/verify', {
     method: 'POST',
     headers: {
@@ -57,13 +57,13 @@ test('submits async jobs first and includes the long-proof timeout in the payloa
       },
     ],
     timeout: 300,
-    runtime_id: 'v4.15.0',
+    runtime_id: 'v4.9.0',
     reuse: false,
   });
   assert.deepEqual(response.body, {
     jobId: 'job-123',
     status: 'queued',
-    runtimeId: 'v4.15.0',
+    runtimeId: 'v4.9.0',
     result: null,
     error: null,
     expiresAt: '2026-03-27T17:00:00Z',
@@ -106,7 +106,7 @@ test('falls back to sync verification when async submit is disabled and sync suc
     );
   }) as typeof fetch;
 
-  const response = await handleVerifyPost(createVerifyRequest('import Mathlib', 'v4.15.0'), {
+  const response = await handleVerifyPost(createVerifyRequest('import Mathlib', 'v4.28.0'), {
     backendUrl: 'https://lean-ui-production.up.railway.app',
     apiKey: 'test-secret',
     hasExplicitServerUrl: true,
@@ -120,7 +120,7 @@ test('falls back to sync verification when async submit is disabled and sync suc
   assert.deepEqual(response.body, {
     jobId: null,
     status: 'completed',
-    runtimeId: 'v4.15.0',
+    runtimeId: 'v4.28.0',
     result: {
       error: null,
       infos: [],
@@ -154,7 +154,7 @@ test('retries sync warmup when async submit times out and the fallback sync path
       return new Response(
         JSON.stringify({
           detail:
-            'Runtime v4.15.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
+            'Runtime v4.9.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
         }),
         { status: 503, headers: { 'Content-Type': 'application/json' } }
       );
@@ -194,7 +194,7 @@ test('retries sync warmup when async submit times out and the fallback sync path
   assert.deepEqual(response.body, {
     jobId: null,
     status: 'completed',
-    runtimeId: 'v4.15.0',
+    runtimeId: 'v4.9.0',
     result: {
       error: null,
       infos: [],
@@ -230,7 +230,7 @@ test('returns a friendly warmup error when async submit is disabled and sync nev
     return new Response(
       JSON.stringify({
         detail:
-          'Runtime v4.15.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
+          'Runtime v4.9.0 is cold and is starting up. Retry asynchronously via /api/async/check.',
       }),
       { status: 503, headers: { 'Content-Type': 'application/json' } }
     );
@@ -355,13 +355,37 @@ test('returns the runtime registry for the frontend picker', async (t) => {
   global.fetch = (async () =>
     new Response(
       JSON.stringify({
-        default_runtime_id: 'v4.15.0',
+        default_runtime_id: 'v4.9.0',
         runtimes: [
+          {
+            runtime_id: 'v4.9.0',
+            display_name: 'Mathlib 4.9.0',
+            lean_version: 'v4.9.0',
+            is_default: true,
+          },
           {
             runtime_id: 'v4.15.0',
             display_name: 'Mathlib 4.15.0',
             lean_version: 'v4.15.0',
-            is_default: true,
+            is_default: false,
+          },
+          {
+            runtime_id: 'v4.24.0',
+            display_name: 'Mathlib 4.24.0',
+            lean_version: 'v4.24.0',
+            is_default: false,
+          },
+          {
+            runtime_id: 'v4.27.0',
+            display_name: 'Mathlib 4.27.0',
+            lean_version: 'v4.27.0',
+            is_default: false,
+          },
+          {
+            runtime_id: 'v4.28.0',
+            display_name: 'Mathlib 4.28.0',
+            lean_version: 'v4.28.0',
+            is_default: false,
           },
         ],
       }),
@@ -376,19 +400,43 @@ test('returns the runtime registry for the frontend picker', async (t) => {
   });
 
   assert.deepEqual(response.body, {
-    defaultRuntimeId: 'v4.15.0',
+    defaultRuntimeId: 'v4.9.0',
     runtimes: [
+      {
+        runtimeId: 'v4.9.0',
+        displayName: 'Mathlib 4.9.0',
+        leanVersion: '4.9.0',
+        isDefault: true,
+      },
       {
         runtimeId: 'v4.15.0',
         displayName: 'Mathlib 4.15.0',
         leanVersion: '4.15.0',
-        isDefault: true,
+        isDefault: false,
+      },
+      {
+        runtimeId: 'v4.24.0',
+        displayName: 'Mathlib 4.24.0',
+        leanVersion: '4.24.0',
+        isDefault: false,
+      },
+      {
+        runtimeId: 'v4.27.0',
+        displayName: 'Mathlib 4.27.0',
+        leanVersion: '4.27.0',
+        isDefault: false,
+      },
+      {
+        runtimeId: 'v4.28.0',
+        displayName: 'Mathlib 4.28.0',
+        leanVersion: '4.28.0',
+        isDefault: false,
       },
     ],
   });
 });
 
-test('returns an explicit upstream error for removed runtimes', async (t) => {
+test('returns an explicit upstream error for actually unknown runtimes', async (t) => {
   const originalFetch = global.fetch;
 
   t.after(() => {
@@ -398,12 +446,12 @@ test('returns an explicit upstream error for removed runtimes', async (t) => {
   global.fetch = (async () =>
     new Response(
       JSON.stringify({
-        detail: 'Unknown runtime_id: v4.9.0',
+        detail: 'Unknown runtime_id: v4.99.0',
       }),
       { status: 400, headers: { 'Content-Type': 'application/json' } }
     )) as typeof fetch;
 
-  const response = await handleVerifyPost(createVerifyRequest('import Mathlib', 'v4.9.0'), {
+  const response = await handleVerifyPost(createVerifyRequest('import Mathlib', 'v4.99.0'), {
     backendUrl: 'https://lean-ui-production.up.railway.app',
     apiKey: 'test-secret',
     hasExplicitServerUrl: true,
@@ -413,11 +461,11 @@ test('returns an explicit upstream error for removed runtimes', async (t) => {
   assert.deepEqual(response.body, {
     jobId: null,
     status: 'failed',
-    error: 'Async submit failed: 400 - Unknown runtime_id: v4.9.0',
+    error: 'Async submit failed: 400 - Unknown runtime_id: v4.99.0',
     result: {
       status: 'server_error',
       passed: false,
-      error: 'Async submit failed: 400 - Unknown runtime_id: v4.9.0',
+      error: 'Async submit failed: 400 - Unknown runtime_id: v4.99.0',
       warnings: [],
       infos: [],
       time: 0,

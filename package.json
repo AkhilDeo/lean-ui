@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:frontend": "node --experimental-strip-types --experimental-specifier-resolution=node --test src/lib/verification-adapter.test.ts src/app/api/verify/route.test.ts src/hooks/useVerificationHistory.test.ts"
+    "test:frontend": "node --experimental-strip-types --experimental-specifier-resolution=node --test src/lib/verification-adapter.test.ts src/lib/runtime-selection.test.ts src/app/api/verify/route.test.ts src/hooks/useVerificationHistory.test.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

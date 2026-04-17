@@ -25,12 +25,15 @@ REGION = "us-east4-eqdc4a"
 REPO = "AkhilDeo/lean-ui"
 REDIS_SERVICE_NAME = "lean-ui-redis"
 REDIS_TEMPLATE_ID = "895cb7c9-8ea9-4407-b4b6-b5013a65145e"
-DEFAULT_RUNTIME_ID = "v4.15.0"
+DEFAULT_RUNTIME_ID = "v4.9.0"
 API_URL = "https://backboard.railway.com/graphql/v2"
-REMOVED_RUNTIME_IDS = ("v4.9.0",)
 
 RUNTIME_SERVICE_NAMES = {
+    "v4.9.0": "lean-ui-v490",
     "v4.15.0": "lean-ui-v4150",
+    "v4.24.0": "lean-ui-v4240",
+    "v4.27.0": "lean-ui-v4270",
+    "v4.28.0": "lean-ui-v4280",
 }
 
 
@@ -301,7 +304,9 @@ def choose_redis_url(redis_vars: dict[str, str]) -> str:
     )
 
 
-def build_common_async_vars(*, redis_url: str, api_key: str) -> dict[str, str]:
+def build_common_async_vars(
+    *, redis_url: str, api_key: str, autoscale_token: str
+) -> dict[str, str]:
     return {
         "LEAN_SERVER_ENVIRONMENT": "prod",
         "LEAN_SERVER_ASYNC_ENABLED": "true",
@@ -310,7 +315,7 @@ def build_common_async_vars(*, redis_url: str, api_key: str) -> dict[str, str]:
         "LEAN_SERVER_ASYNC_ALERT_MAX_OLDEST_QUEUED_AGE_SEC": "60",
         "LEAN_SERVER_REDIS_URL": redis_url,
         "LEAN_SERVER_API_KEY": api_key,
-        "LEAN_SERVER_ASYNC_RESULT_TTL_SEC": "86400",
+        "LEAN_SERVER_ASYNC_RESULT_TTL_SEC": "3600",
         "LEAN_SERVER_ASYNC_QUEUE_NAME_LIGHT": "lean_async_light",
         "LEAN_SERVER_ASYNC_QUEUE_NAME_HEAVY": "lean_async_heavy",
         "LEAN_SERVER_ASYNC_BACKLOG_LIMIT": "100000",
@@ -319,6 +324,8 @@ def build_common_async_vars(*, redis_url: str, api_key: str) -> dict[str, str]:
         "LEAN_SERVER_REQUEST_TIMEOUT_MAX_SEC": "300",
         "LEAN_SERVER_MAX_WAIT": "300",
         "LEAN_SERVER_MIN_HOST_FREE_MEM": "4G",
+        "LEAN_SERVER_DATABASE_URL": "",
+        "LEAN_SERVER_AUTOSCALE_RAILWAY_TOKEN": autoscale_token,
     }
 
 
@@ -329,6 +336,7 @@ def configure_gateway_service(
     runtime_service_ids: dict[str, str],
     redis_url: str,
     api_key: str,
+    autoscale_token: str,
 ) -> None:
     update_service_instance(
         client,
@@ -345,7 +353,11 @@ def configure_gateway_service(
     )
     update_limits(client, service_id=GATEWAY_SERVICE_ID, vcpus=4, memory_gb=8)
 
-    gateway_vars = build_common_async_vars(redis_url=redis_url, api_key=api_key)
+    gateway_vars = build_common_async_vars(
+        redis_url=redis_url,
+        api_key=api_key,
+        autoscale_token=autoscale_token,
+    )
     gateway_vars.update(
         {
             "LEAN_SERVER_GATEWAY_ENABLED": "true",
@@ -353,14 +365,12 @@ def configure_gateway_service(
             "LEAN_SERVER_DEFAULT_RUNTIME_ID": DEFAULT_RUNTIME_ID,
             "LEAN_SERVER_RAILWAY_ENVIRONMENT_ID": ENVIRONMENT_ID,
             "LEAN_SERVER_GATEWAY_SYNC_PROXY_TIMEOUT_SEC": "300",
+            "LEAN_SERVER_GATEWAY_WAKE_REPLICAS": "1",
         }
     )
     for runtime_id in seeded_runtime_ids():
         gateway_vars[runtime_env_key(runtime_id, "SERVICE_ID")] = runtime_service_ids[runtime_id]
         gateway_vars[runtime_env_key(runtime_id, "BASE_URL")] = runtime_service_urls[runtime_id]
-    for runtime_id in REMOVED_RUNTIME_IDS:
-        gateway_vars[runtime_env_key(runtime_id, "SERVICE_ID")] = ""
-        gateway_vars[runtime_env_key(runtime_id, "BASE_URL")] = ""
 
     upsert_variables(client, service_id=GATEWAY_SERVICE_ID, variables=gateway_vars)
 
@@ -372,6 +382,7 @@ def configure_runtime_service(
     service_id: str,
     redis_url: str,
     api_key: str,
+    autoscale_token: str,
 ) -> None:
     update_service_instance(
         client,
@@ -388,7 +399,11 @@ def configure_runtime_service(
     )
     update_limits(client, service_id=service_id, vcpus=4, memory_gb=8)
 
-    runtime_vars = build_common_async_vars(redis_url=redis_url, api_key=api_key)
+    runtime_vars = build_common_async_vars(
+        redis_url=redis_url,
+        api_key=api_key,
+        autoscale_token=autoscale_token,
+    )
     runtime_vars.update(
         {
             "LEAN_SERVER_GATEWAY_ENABLED": "false",
@@ -405,6 +420,7 @@ def configure_runtime_service(
             "LEAN_SERVER_ASYNC_WORKER_QUEUE_TIER": "all",
             "LEAN_SERVER_ASYNC_LIGHT_RETRY_ATTEMPTS": "5",
             "LEAN_SERVER_ASYNC_HEAVY_RETRY_ATTEMPTS": "7",
+            "LEAN_SERVER_RUNTIME_IDLE_TTL_SEC": "300",
         }
     )
     upsert_variables(client, service_id=service_id, variables=runtime_vars)
@@ -439,6 +455,7 @@ def main() -> int:
             service_id=runtime_service_ids[runtime_id],
             redis_url=redis_url,
             api_key=api_key,
+            autoscale_token=token,
         )
 
     for runtime_id in seeded_runtime_ids():
@@ -459,6 +476,7 @@ def main() -> int:
         runtime_service_ids=runtime_service_ids,
         redis_url=redis_url,
         api_key=api_key,
+        autoscale_token=token,
     )
     redeploy(client, service_id=GATEWAY_SERVICE_ID)
     wait_for_success(client, service_id=GATEWAY_SERVICE_ID)
