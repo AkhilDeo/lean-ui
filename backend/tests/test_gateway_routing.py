@@ -9,6 +9,7 @@ from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 from kimina_client.models import CheckResponse, ReplResponse
 
+from server.manager import WarmPoolStatus, WarmTargetStatus
 from server.main import create_app
 from server.runtime_registry import runtime_env_key, seeded_runtime_ids
 from server.settings import Environment, Settings
@@ -123,6 +124,38 @@ def test_gateway_sync_check_wakes_cold_runtime(monkeypatch) -> None:  # type: ig
         )
         assert response.status_code == 503
         assert calls == ["v4.15.0"]
+
+
+def test_gateway_async_submit_skips_wake_when_runtime_is_already_warm(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _seed_gateway_runtime_env(monkeypatch)
+    app = create_app(_gateway_app())
+
+    with TestClient(app, base_url="http://testserver") as client:
+        client.headers.update({"Authorization": "Bearer test-key"})
+        gateway = app.state.runtime_gateway
+
+        async def fake_is_warm(runtime, *, timeout_sec=None):  # type: ignore[no-untyped-def]
+            _ = timeout_sec
+            return runtime.runtime_id == "v4.15.0"
+
+        async def fake_wake(runtime):  # type: ignore[no-untyped-def]
+            raise AssertionError(f"did not expect wake for warm runtime {runtime.runtime_id}")
+
+        monkeypatch.setattr(gateway, "is_runtime_warm", fake_is_warm)
+        monkeypatch.setattr(gateway, "wake_runtime", fake_wake)
+
+        response = client.post(
+            "/api/async/check",
+            json={
+                "snippets": [{"id": "verification", "code": "import Mathlib\n#check Nat"}],
+                "runtime_id": "v4.15.0",
+                "timeout": 30,
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "queued"
+        assert body["job_id"]
 
 
 def test_gateway_sync_check_rejects_unknown_runtime(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -344,6 +377,20 @@ async def test_runtime_health_reports_readiness_transition(monkeypatch) -> None:
         assert timeout == 60.0
         warmup_started.set()
         await release_warmup.wait()
+        return WarmPoolStatus(
+            success=True,
+            reason=None,
+            targets=[
+                WarmTargetStatus(
+                    header="import Mathlib",
+                    target=1,
+                    reached=1,
+                    attempts=1,
+                    success=True,
+                    error=None,
+                )
+            ],
+        )
 
     monkeypatch.setattr("server.manager.Manager.ensure_warm_repls", fake_ensure_warm_repls)
     app = create_app(_runtime_app())
@@ -362,6 +409,20 @@ async def test_runtime_health_reports_readiness_transition(monkeypatch) -> None:
                 "runtime_id": "v4.15.0",
                 "ready": False,
                 "ready_reason": "Runtime v4.15.0 verifier warmup is still in progress.",
+                "ready_details": {
+                    "success": False,
+                    "reason": "warmup_pending",
+                    "targets": [
+                        {
+                            "header": "import Mathlib",
+                            "target": 1,
+                            "reached": 0,
+                            "attempts": 0,
+                            "success": False,
+                            "error": "warmup_pending",
+                        }
+                    ],
+                },
             }
 
             release_warmup.set()
@@ -375,4 +436,74 @@ async def test_runtime_health_reports_readiness_transition(monkeypatch) -> None:
                 "runtime_id": "v4.15.0",
                 "ready": True,
                 "ready_reason": None,
+                "ready_details": {
+                    "success": True,
+                    "reason": None,
+                    "targets": [
+                        {
+                            "header": "import Mathlib",
+                            "target": 1,
+                            "reached": 1,
+                            "attempts": 1,
+                            "success": True,
+                            "error": None,
+                        }
+                    ],
+                },
+            }
+
+
+@pytest.mark.asyncio
+async def test_runtime_health_stays_unready_when_warm_target_is_not_reached(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def fake_ensure_warm_repls(self, targets, *, timeout=60.0):  # type: ignore[no-untyped-def]
+        _ = self
+        assert targets == {"import Mathlib": 1}
+        assert timeout == 60.0
+        return WarmPoolStatus(
+            success=False,
+            reason="Warm pool target 'import Mathlib' not reached (0/1)",
+            targets=[
+                WarmTargetStatus(
+                    header="import Mathlib",
+                    target=1,
+                    reached=0,
+                    attempts=1,
+                    success=False,
+                    error="Warm pool target 'import Mathlib' not reached (0/1)",
+                )
+            ],
+        )
+
+    monkeypatch.setattr("server.manager.Manager.ensure_warm_repls", fake_ensure_warm_repls)
+    app = create_app(_runtime_app())
+
+    async with LifespanManager(app):
+        await asyncio.sleep(0.05)
+        assert app.state.runtime_ready_event.is_set() is False
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            health = await client.get("/health")
+            assert health.status_code == 200
+            assert health.json() == {
+                "status": "ok",
+                "mode": "runtime",
+                "runtime_id": "v4.15.0",
+                "ready": False,
+                "ready_reason": "Warm pool target 'import Mathlib' not reached (0/1)",
+                "ready_details": {
+                    "success": False,
+                    "reason": "Warm pool target 'import Mathlib' not reached (0/1)",
+                    "targets": [
+                        {
+                            "header": "import Mathlib",
+                            "target": 1,
+                            "reached": 0,
+                            "attempts": 1,
+                            "success": False,
+                            "error": "Warm pool target 'import Mathlib' not reached (0/1)",
+                        }
+                    ],
+                },
             }

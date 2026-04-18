@@ -23,6 +23,7 @@ from .settings import Environment, Settings
 from .worker import run_worker
 
 SYNC_READY_HEADER = "import Mathlib"
+DEFAULT_RUNTIME_WARM_TARGETS = {SYNC_READY_HEADER: 1}
 
 
 def no_sort(self: GenerateJsonSchema, value: Any, parent_key: Any = None) -> Any:
@@ -62,20 +63,41 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.runtime_registry = runtime_registry
         app.state.runtime_ready_event = asyncio.Event()
         app.state.runtime_ready_reason = None
+        app.state.runtime_ready_details = None
 
-        def set_runtime_ready(*, ready: bool, reason: str | None) -> None:
+        def set_runtime_ready(
+            *,
+            ready: bool,
+            reason: str | None,
+            details: dict[str, Any] | None = None,
+        ) -> None:
             if ready:
                 app.state.runtime_ready_event.set()
             else:
                 app.state.runtime_ready_event.clear()
             app.state.runtime_ready_reason = reason
+            app.state.runtime_ready_details = details
 
         if settings.gateway_enabled:
-            set_runtime_ready(ready=True, reason=None)
+            set_runtime_ready(ready=True, reason=None, details=None)
         else:
             set_runtime_ready(
                 ready=False,
                 reason=f"Runtime {settings.runtime_id} verifier warmup is still in progress.",
+                details={
+                    "success": False,
+                    "reason": "warmup_pending",
+                    "targets": [
+                        {
+                            "header": SYNC_READY_HEADER,
+                            "target": 1,
+                            "reached": 0,
+                            "attempts": 0,
+                            "success": False,
+                            "error": "warmup_pending",
+                        }
+                    ],
+                },
             )
         app.state.runtime_gateway = (
             RuntimeGateway(settings, runtime_registry) if settings.gateway_enabled else None
@@ -110,18 +132,46 @@ def create_app(settings: Settings) -> FastAPI:
                         settings.runtime_id,
                         SYNC_READY_HEADER,
                     )
-                    await manager.ensure_warm_repls({SYNC_READY_HEADER: 1}, timeout=60.0)
-                    set_runtime_ready(ready=True, reason=None)
-                    logger.info(
-                        "Runtime readiness warmup completed for {}",
-                        settings.runtime_id,
+                    warmup = await manager.ensure_warm_repls(
+                        DEFAULT_RUNTIME_WARM_TARGETS,
+                        timeout=60.0,
                     )
+                    warmup_details = warmup.as_dict()
+                    if warmup.success:
+                        set_runtime_ready(
+                            ready=True,
+                            reason=None,
+                            details=warmup_details,
+                        )
+                        logger.info(
+                            "Runtime readiness warmup completed for {}",
+                            settings.runtime_id,
+                        )
+                    else:
+                        reason = warmup.reason or (
+                            f"Runtime {settings.runtime_id} verifier warmup failed."
+                        )
+                        set_runtime_ready(
+                            ready=False,
+                            reason=reason,
+                            details=warmup_details,
+                        )
+                        logger.warning(
+                            "Runtime readiness warmup incomplete for {}: {}",
+                            settings.runtime_id,
+                            reason,
+                        )
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
                     set_runtime_ready(
                         ready=False,
                         reason=f"Runtime {settings.runtime_id} verifier warmup failed: {e}",
+                        details={
+                            "success": False,
+                            "reason": str(e),
+                            "targets": [],
+                        },
                     )
                     logger.exception("Runtime readiness warmup failed: {}", e)
 

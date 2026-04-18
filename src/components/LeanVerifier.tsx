@@ -8,6 +8,7 @@ import { HistorySidebar } from './HistorySidebar';
 import { useVerificationHistory } from '@/hooks/useVerificationHistory';
 import {
   RuntimeOption,
+  VerificationJobTiming,
   VerificationResult,
   VerifyApiResponse,
   VerifyJobResponse,
@@ -29,6 +30,8 @@ import { generateRandomName } from '@/lib/nameGenerator';
 const DEFAULT_CODE = `-- Welcome to Lean Verifier!
 -- Choose a Lean + Mathlib runtime from the picker above.
 -- Verification is async-first, so cold runtimes queue immediately.
+
+import Mathlib
 
 theorem hello_world : 1 + 1 = 2 := by
   rfl
@@ -125,7 +128,12 @@ export function LeanVerifier() {
   }, []);
 
   const applyVerificationOutcome = useCallback(
-    (id: string, runtime: RuntimeOption, result: VerifyApiResponse) => {
+    (
+      id: string,
+      runtime: RuntimeOption,
+      result: VerifyApiResponse,
+      timing: VerificationJobTiming | null | undefined = null
+    ) => {
       const updatedResult: Partial<VerificationResult> = {
         status: toUiStatus(result),
         errors: result.error ? [result.error] : [],
@@ -137,6 +145,7 @@ export function LeanVerifier() {
         runtimeId: runtime.runtimeId,
         runtimeLabel: runtime.displayName,
         leanVersion: runtime.leanVersion,
+        jobTiming: timing ?? null,
       };
       updateVerification(id, updatedResult);
     },
@@ -150,7 +159,8 @@ export function LeanVerifier() {
       status: 'queued' | 'running',
       jobId: string,
       expiresAt: string | null,
-      progressMessage?: string
+      progressMessage?: string,
+      timing: VerificationJobTiming | null | undefined = null
     ) => {
       updateVerification(id, {
         status: 'pending',
@@ -163,6 +173,7 @@ export function LeanVerifier() {
         runtimeId: runtime.runtimeId,
         runtimeLabel: runtime.displayName,
         leanVersion: runtime.leanVersion,
+        jobTiming: timing ?? null,
       });
     },
     [updateVerification]
@@ -174,7 +185,8 @@ export function LeanVerifier() {
       runtime: RuntimeOption,
       jobStatus: 'failed' | 'expired',
       error: string,
-      expiresAt: string | null
+      expiresAt: string | null,
+      timing: VerificationJobTiming | null | undefined = null
     ) => {
       updateVerification(id, {
         status: 'error',
@@ -186,6 +198,7 @@ export function LeanVerifier() {
         runtimeId: runtime.runtimeId,
         runtimeLabel: runtime.displayName,
         leanVersion: runtime.leanVersion,
+        jobTiming: timing ?? null,
       });
     },
     [updateVerification]
@@ -213,7 +226,7 @@ export function LeanVerifier() {
               }
 
               if (poll.status === 'completed' && poll.result) {
-                applyVerificationOutcome(id, runtime, poll.result);
+                applyVerificationOutcome(id, runtime, poll.result, poll.timing ?? null);
                 return;
               }
 
@@ -223,7 +236,8 @@ export function LeanVerifier() {
                   runtime,
                   poll.status,
                   poll.error || 'Verification job failed.',
-                  poll.expiresAt ?? null
+                  poll.expiresAt ?? null,
+                  poll.timing ?? null
                 );
                 return;
               }
@@ -234,7 +248,8 @@ export function LeanVerifier() {
                   runtime,
                   'failed',
                   poll.error || 'Verification job completed without a result payload.',
-                  poll.expiresAt ?? null
+                  poll.expiresAt ?? null,
+                  poll.timing ?? null
                 );
                 return;
               }
@@ -244,7 +259,9 @@ export function LeanVerifier() {
                 runtime,
                 poll.status,
                 jobId,
-                poll.expiresAt ?? null
+                poll.expiresAt ?? null,
+                undefined,
+                poll.timing ?? null
               );
               consecutiveFailures = 0;
               await sleep(POLL_INTERVAL_MS);
@@ -258,6 +275,7 @@ export function LeanVerifier() {
                   runtime,
                   'failed',
                   `Failed while polling verification job: ${message}`,
+                  null,
                   null
                 );
                 return;
@@ -269,7 +287,8 @@ export function LeanVerifier() {
                 'running',
                 jobId,
                 null,
-                `Connection hiccup while checking ${runtime.displayName}. Retrying...`
+                `Connection hiccup while checking ${runtime.displayName}. Retrying...`,
+                null
               );
               await sleep(POLL_RETRY_DELAY_MS * consecutiveFailures);
             }
@@ -303,6 +322,8 @@ export function LeanVerifier() {
       jobId: null,
       jobStatus: 'queued',
       jobExpiresAt: null,
+      submitLatencyMs: null,
+      jobTiming: null,
       runtimeId: selectedRuntime.runtimeId,
       runtimeLabel: selectedRuntime.displayName,
       leanVersion: selectedRuntime.leanVersion,
@@ -314,6 +335,7 @@ export function LeanVerifier() {
     setTitle('');
 
     try {
+      const submitStartedAt = performance.now();
       const response = await fetch('/api/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -321,9 +343,11 @@ export function LeanVerifier() {
       });
 
       const result = (await response.json()) as VerifyJobResponse;
+      const submitLatencyMs = Math.max(Math.round(performance.now() - submitStartedAt), 0);
+      updateVerification(id, { submitLatencyMs });
 
       if (result.status === 'completed' && result.result) {
-        applyVerificationOutcome(id, selectedRuntime, result.result);
+        applyVerificationOutcome(id, selectedRuntime, result.result, result.timing ?? null);
         return;
       }
 
@@ -333,7 +357,8 @@ export function LeanVerifier() {
           selectedRuntime,
           result.status,
           result.error || 'Verification submission failed.',
-          result.expiresAt ?? null
+          result.expiresAt ?? null,
+          result.timing ?? null
         );
         return;
       }
@@ -344,7 +369,8 @@ export function LeanVerifier() {
           selectedRuntime,
           'failed',
           result.error || 'Verification submission failed.',
-          result.expiresAt ?? null
+          result.expiresAt ?? null,
+          result.timing ?? null
         );
         return;
       }
@@ -354,7 +380,9 @@ export function LeanVerifier() {
         selectedRuntime,
         result.status,
         result.jobId,
-        result.expiresAt ?? null
+        result.expiresAt ?? null,
+        undefined,
+        result.timing ?? null
       );
       pollVerificationJob(id, result.jobId, selectedRuntime);
     } catch (error) {
@@ -373,6 +401,7 @@ export function LeanVerifier() {
     addVerification,
     applyVerificationOutcome,
     code,
+    updateVerification,
     markVerificationPending,
     markVerificationTerminal,
     pollVerificationJob,

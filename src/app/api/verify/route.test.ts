@@ -31,6 +31,7 @@ test('submits async jobs first and includes the long-proof timeout in the payloa
       JSON.stringify({
         job_id: 'job-123',
         status: 'queued',
+        queued_at: '2026-03-27T16:59:45Z',
         expires_at: '2026-03-27T17:00:00Z',
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
@@ -58,7 +59,7 @@ test('submits async jobs first and includes the long-proof timeout in the payloa
     ],
     timeout: 300,
     runtime_id: 'v4.9.0',
-    reuse: false,
+    reuse: true,
   });
   assert.deepEqual(response.body, {
     jobId: 'job-123',
@@ -67,6 +68,14 @@ test('submits async jobs first and includes the long-proof timeout in the payloa
     result: null,
     error: null,
     expiresAt: '2026-03-27T17:00:00Z',
+    timing: {
+      queuedAt: '2026-03-27T16:59:45Z',
+      startedAt: null,
+      finishedAt: null,
+      queueWaitMs: null,
+      runMs: null,
+      totalMs: null,
+    },
   });
 });
 
@@ -129,6 +138,7 @@ test('falls back to sync verification when async submit is disabled and sync suc
       time: 0,
       warnings: [],
     },
+    timing: null,
   });
 });
 
@@ -203,6 +213,7 @@ test('retries sync warmup when async submit times out and the fallback sync path
       time: 0,
       warnings: [],
     },
+    timing: null,
   });
 });
 
@@ -263,6 +274,7 @@ test('returns a friendly warmup error when async submit is disabled and sync nev
       infos: [],
       time: 0,
     },
+    timing: null,
   });
 });
 
@@ -279,6 +291,14 @@ test('poll adapts completed async jobs', async (t) => {
         job_id: 'job-123',
         status: 'completed',
         expires_at: '2026-03-27T17:00:00Z',
+        timing: {
+          queued_at: '2026-03-27T16:59:45Z',
+          started_at: '2026-03-27T16:59:50Z',
+          finished_at: '2026-03-27T16:59:58Z',
+          queue_wait_ms: 5000,
+          run_ms: 8000,
+          total_ms: 13000,
+        },
         results: [
           {
             id: 'verification',
@@ -311,6 +331,14 @@ test('poll adapts completed async jobs', async (t) => {
     },
     error: null,
     expiresAt: '2026-03-27T17:00:00Z',
+    timing: {
+      queuedAt: '2026-03-27T16:59:45Z',
+      startedAt: '2026-03-27T16:59:50Z',
+      finishedAt: '2026-03-27T16:59:58Z',
+      queueWaitMs: 5000,
+      runMs: 8000,
+      totalMs: 13000,
+    },
   });
 });
 
@@ -342,6 +370,7 @@ test('poll returns an expired job state when the backend no longer has the job',
     error: 'Verification job expired or is no longer available. Please resubmit your proof.',
     result: null,
     expiresAt: null,
+    timing: null,
   });
 });
 
@@ -470,5 +499,6 @@ test('returns an explicit upstream error for actually unknown runtimes', async (
       infos: [],
       time: 0,
     },
+    timing: null,
   });
 });

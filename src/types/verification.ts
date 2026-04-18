@@ -10,9 +10,20 @@ export interface VerificationResult {
   jobStatus?: VerificationJobStatus | null;
   progressMessage?: string | null;
   jobExpiresAt?: string | null;
+  submitLatencyMs?: number | null;
+  jobTiming?: VerificationJobTiming | null;
   runtimeId: string;
   runtimeLabel: string;
   leanVersion: string;
+}
+
+export interface VerificationJobTiming {
+  queuedAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  queueWaitMs?: number | null;
+  runMs?: number | null;
+  totalMs?: number | null;
 }
 
 export interface RuntimeOption {
@@ -53,4 +64,5 @@ export interface VerifyJobResponse {
   result?: VerifyApiResponse | null;
   error?: string | null;
   expiresAt?: string | null;
+  timing?: VerificationJobTiming | null;
 }

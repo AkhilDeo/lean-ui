@@ -12,6 +12,11 @@ Capture a new entry after every user correction.
 ## Entries
 - Add newest entries at the top.
 - Date: 2026-04-17
+- Correction received: Keep strict Lean `v4.9.0` semantics (no auto-fallback), restore hot-start reuse for real warm contexts, and include production rollout + timing validation in the same implementation pass.
+- Root cause: I had accepted partial mitigations (cold/warm messaging and fallback behavior) without fully fixing the `v4.9.0` command-stream path, readiness truthfulness, and observability needed to prove where latency was actually coming from.
+- New preventive rule: For runtime-latency regressions, do not ship until the root runtime path is fixed, readiness gates represent command-level truth, reuse policy is explicit and safe, and production validation includes queue-wait vs execution timing evidence.
+- Where applied: `tasks/lessons.md`, backend runtime warmup/readiness logic, `v4.9.0` build patching, frontend `reuse` payload defaults, async timing contracts/UI, and live Railway/Vercel validation.
+- Date: 2026-04-17
 - Correction received: Keep Lean `v4.9.0` warm by default and do not throttle the primary runtime to a single worker / single REPL; use Railway's native sleep behavior for the colder runtimes instead of replica-to-zero hacks.
 - Root cause: I carried a conservative cost-cutting rollout too far by pinning the default runtime to `MAX_REPLS=1` and relying on custom replica-count scale-down logic without validating Railway's current Serverless behavior or the live queueing impact.
 - New preventive rule: When optimizing cost on Railway, use Railway's native Serverless/App Sleeping behavior for cold services, keep the default hot path explicitly warm when UX matters, and never force the primary runtime to a single REPL lane unless live traffic proves it is sufficient.

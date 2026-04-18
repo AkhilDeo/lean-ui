@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 from uuid import uuid4
 
 from kimina_client import CheckRequest, ReplResponse
@@ -60,10 +60,20 @@ class AsyncPollResponse(BaseModel):
     status: AsyncJobStatus
     progress: AsyncProgress
     results: list[ReplResponse] | None = None
+    timing: AsyncJobTiming | None = None
     created_at: str
     updated_at: str
     expires_at: str
     error: str | None = None
+
+
+class AsyncJobTiming(BaseModel):
+    queued_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    queue_wait_ms: int | None = None
+    run_ms: int | None = None
+    total_ms: int | None = None
 
 
 class AsyncQueueTierMetrics(BaseModel):
@@ -159,6 +169,35 @@ def _iso_to_datetime(value: str | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
+    if start is None or end is None:
+        return None
+    delta_ms = int((end - start).total_seconds() * 1000)
+    return max(delta_ms, 0)
+
+
+def _build_job_timing(meta: Mapping[str, Any]) -> AsyncJobTiming | None:
+    queued_at_raw = str(meta.get("queued_at") or meta.get("created_at") or "")
+    started_at_raw = str(meta.get("started_at") or "")
+    finished_at_raw = str(meta.get("finished_at") or "")
+
+    queued_at = _iso_to_datetime(queued_at_raw)
+    started_at = _iso_to_datetime(started_at_raw)
+    finished_at = _iso_to_datetime(finished_at_raw)
+
+    if queued_at is None and started_at is None and finished_at is None:
+        return None
+
+    return AsyncJobTiming(
+        queued_at=queued_at_raw or None,
+        started_at=started_at_raw or None,
+        finished_at=finished_at_raw or None,
+        queue_wait_ms=_duration_ms(queued_at, started_at),
+        run_ms=_duration_ms(started_at, finished_at),
+        total_ms=_duration_ms(queued_at, finished_at),
+    )
 
 
 METRICS_STARTED_AT_FIELD = "started_at_epoch_s"
@@ -362,6 +401,7 @@ class RedisAsyncJobs:
                 "running": "0",
                 "queue_tiers": ",".join(sorted(tier.value for tier in tasks_by_tier)),
                 "runtime_id": runtime_id,
+                "queued_at": queued_at,
                 "created_at": queued_at,
                 "updated_at": queued_at,
                 "expires_at": expires_at,
@@ -409,7 +449,11 @@ class RedisAsyncJobs:
         except Exception as e:
             await self.redis.hset(
                 meta_key,
-                mapping={"status": AsyncJobStatus.failed.value, "error": "enqueue_failed"},
+                mapping={
+                    "status": AsyncJobStatus.failed.value,
+                    "error": "enqueue_failed",
+                    "finished_at": _now_iso(),
+                },
             )
             job_logger.exception(
                 "Async job enqueue failed (redis): job_id={} queues={} error={}",
@@ -477,6 +521,7 @@ class RedisAsyncJobs:
             status=status,
             progress=AsyncProgress(total=total, done=done, failed=failed, running=running),
             results=results,
+            timing=_build_job_timing(meta),
             created_at=meta.get("created_at", _now_iso()),
             updated_at=meta.get("updated_at", _now_iso()),
             expires_at=meta.get("expires_at", _expires_iso(self.ttl_sec)),
@@ -559,6 +604,7 @@ class RedisAsyncJobs:
             meta_key,
             mapping={"status": AsyncJobStatus.running.value, "updated_at": _now_iso()},
         )
+        pipe.hsetnx(meta_key, "started_at", _now_iso())
         if state != AsyncJobStatus.running.value:
             pipe.hset(task_states_key, str(task.index), AsyncJobStatus.running.value)
             pipe.hincrby(meta_key, "running", 1)
@@ -670,6 +716,7 @@ class RedisAsyncJobs:
                 meta_key,
                 mapping={
                     "status": AsyncJobStatus.completed.value,
+                    "finished_at": _now_iso(),
                     "updated_at": _now_iso(),
                 },
             )
@@ -1098,6 +1145,7 @@ class InMemoryAsyncJobs:
                 "failed": 0,
                 "running": 0,
                 "runtime_id": runtime_id,
+                "queued_at": queued_at,
                 "created_at": queued_at,
                 "updated_at": queued_at,
                 "expires_at": expires_at,
@@ -1160,6 +1208,7 @@ class InMemoryAsyncJobs:
                     running=meta["running"],
                 ),
                 results=finalized,
+                timing=_build_job_timing(meta),
                 created_at=meta["created_at"],
                 updated_at=meta["updated_at"],
                 expires_at=meta["expires_at"],
@@ -1224,6 +1273,8 @@ class InMemoryAsyncJobs:
                     task.snippet.id,
                 )
                 return
+            if meta.get("started_at") is None:
+                meta["started_at"] = _now_iso()
             meta["status"] = AsyncJobStatus.running
             meta["running"] += 1
             self._running_tasks_by_bucket[self._bucket(task.runtime_id, task.queue_tier)] += 1
@@ -1286,6 +1337,7 @@ class InMemoryAsyncJobs:
             )
             if meta["done"] + meta["failed"] >= meta["total"]:
                 meta["status"] = AsyncJobStatus.completed
+                meta["finished_at"] = _now_iso()
                 self._inflight_jobs = max(self._inflight_jobs - 1, 0)
                 task_logger.debug(
                     "Async job completed (in-memory): job_id={} done={} failed={} total={}",
@@ -1347,6 +1399,7 @@ class InMemoryAsyncJobs:
             )
             if meta["done"] + meta["failed"] >= meta["total"]:
                 meta["status"] = AsyncJobStatus.completed
+                meta["finished_at"] = _now_iso()
                 self._inflight_jobs = max(self._inflight_jobs - 1, 0)
                 task_logger.debug(
                     "Async job completed (in-memory): job_id={} done={} failed={} total={}",

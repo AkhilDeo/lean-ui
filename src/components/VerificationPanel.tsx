@@ -9,6 +9,16 @@ interface VerificationPanelProps {
   result: VerificationResult | null;
 }
 
+function formatDurationMs(value: number | null | undefined): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  if (value < 1000) {
+    return `${value} ms`;
+  }
+  return `${(value / 1000).toFixed(2)} s`;
+}
+
 export function VerificationPanel({ result }: VerificationPanelProps) {
   if (!result) {
     return (
@@ -32,6 +42,14 @@ export function VerificationPanel({ result }: VerificationPanelProps) {
         return <Clock className="h-6 w-6 text-muted-foreground" />;
     }
   };
+
+  const submitLatencyLabel = formatDurationMs(result.submitLatencyMs);
+  const queueWaitLabel = formatDurationMs(result.jobTiming?.queueWaitMs);
+  const runLabel = formatDurationMs(result.jobTiming?.runMs);
+  const backendTotalLabel = formatDurationMs(result.jobTiming?.totalMs);
+  const hasTimingDetails = Boolean(
+    submitLatencyLabel || queueWaitLabel || runLabel || backendTotalLabel
+  );
 
   const getStatusBadge = () => {
     if (result.status === 'pending') {
@@ -85,6 +103,18 @@ export function VerificationPanel({ result }: VerificationPanelProps) {
                   Job expires at {new Date(result.jobExpiresAt).toLocaleString()}.
                 </p>
               )}
+            </div>
+          )}
+
+          {hasTimingDetails && (
+            <div className="mb-6 rounded-lg border border-border/70 bg-background/50 p-4 text-sm">
+              <p className="font-medium text-foreground">Timing Breakdown</p>
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {submitLatencyLabel && <p>Submit latency: {submitLatencyLabel}</p>}
+                {queueWaitLabel && <p>Queue wait: {queueWaitLabel}</p>}
+                {runLabel && <p>Execution: {runLabel}</p>}
+                {backendTotalLabel && <p>Total backend time: {backendTotalLabel}</p>}
+              </div>
             </div>
           )}
 

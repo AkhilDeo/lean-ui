@@ -17,7 +17,7 @@ from ..async_jobs import (
 )
 from ..auth import require_key
 from ..request_policy import normalize_check_request
-from ..runtime_gateway import RuntimeGateway
+from ..runtime_gateway import RuntimeGateway, WAKE_PING_TIMEOUT_SEC
 from ..settings import Settings
 from .check import ensure_runtime_request_allowed, get_runtime_settings
 
@@ -63,7 +63,12 @@ async def submit_async_check(
     ensure_runtime_request_allowed(runtime_settings, runtime_id)
     if runtime_gateway is not None:
         runtime = runtime_gateway.require_runtime(runtime_id)
-        await runtime_gateway.wake_runtime(runtime)
+        is_warm = await runtime_gateway.is_runtime_warm(
+            runtime,
+            timeout_sec=WAKE_PING_TIMEOUT_SEC,
+        )
+        if not is_warm:
+            await runtime_gateway.wake_runtime(runtime)
     settings = getattr(request.app.state, "settings", runtime_settings)
     soft_limit = int(getattr(settings, "async_admission_queue_limit", 0) or 0)
     if soft_limit > 0:

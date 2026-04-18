@@ -23,13 +23,24 @@ export interface VerifyRouteResponse {
 interface BackendAsyncSubmitResponse {
   job_id: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
+  queued_at?: string;
   expires_at?: string;
+}
+
+interface BackendAsyncJobTiming {
+  queued_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  queue_wait_ms?: number | null;
+  run_ms?: number | null;
+  total_ms?: number | null;
 }
 
 interface BackendAsyncPollResponse {
   job_id: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'expired';
   results?: unknown[];
+  timing?: BackendAsyncJobTiming | null;
   error?: string | null;
   expires_at?: string | null;
 }
@@ -138,6 +149,7 @@ function buildConfigErrorResponse(error: string): VerifyRouteResponse {
         infos: [],
         time: 0,
       },
+      timing: null,
     },
     status: 200,
   };
@@ -155,6 +167,7 @@ function buildExpiredJobResponse(jobId: string): VerifyRouteResponse {
       error: EXPIRED_JOB_MESSAGE,
       result: null,
       expiresAt: null,
+      timing: null,
     },
     status: 200,
   };
@@ -231,6 +244,40 @@ function shouldFallbackToSync(asyncResult: AsyncSubmitResult): boolean {
 
 function buildUpstreamHttpError(prefix: string, status: number, errorText: string): string {
   return `${prefix}: ${status} - ${normalizeErrorText(errorText)}`;
+}
+
+function mapBackendTiming(
+  timing: BackendAsyncJobTiming | null | undefined
+): {
+  queuedAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  queueWaitMs: number | null;
+  runMs: number | null;
+  totalMs: number | null;
+} | null {
+  if (!timing) {
+    return null;
+  }
+  const mapped = {
+    queuedAt: timing.queued_at ?? null,
+    startedAt: timing.started_at ?? null,
+    finishedAt: timing.finished_at ?? null,
+    queueWaitMs: timing.queue_wait_ms ?? null,
+    runMs: timing.run_ms ?? null,
+    totalMs: timing.total_ms ?? null,
+  };
+  if (
+    mapped.queuedAt === null &&
+    mapped.startedAt === null &&
+    mapped.finishedAt === null &&
+    mapped.queueWaitMs === null &&
+    mapped.runMs === null &&
+    mapped.totalMs === null
+  ) {
+    return null;
+  }
+  return mapped;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -399,7 +446,7 @@ export async function handleVerifyPost(
       ],
       timeout: DEFAULT_PROOF_TIMEOUT_SEC,
       runtime_id: runtimeId,
-      reuse: false,
+      reuse: true,
     };
     const headers = buildBackendHeaders(config.apiKey);
     const submitResult = await runAsyncSubmit(
@@ -419,6 +466,9 @@ export async function handleVerifyPost(
           result: null,
           error: null,
           expiresAt: submit.expires_at ?? null,
+          timing: mapBackendTiming({
+            queued_at: submit.queued_at ?? null,
+          }),
         },
         status: 200,
       };
@@ -448,6 +498,7 @@ export async function handleVerifyPost(
           status: 'completed',
           runtimeId,
           result: adaptVerificationResponse(syncResult.payload),
+          timing: null,
         },
         status: 200,
       };
@@ -469,6 +520,7 @@ export async function handleVerifyPost(
             status: 'completed',
             runtimeId,
             result: adaptVerificationResponse(warmupResult.payload),
+            timing: null,
           },
           status: 200,
         };
@@ -524,6 +576,7 @@ export async function handleVerifyPoll(
           error: buildUpstreamHttpError('Async poll failed', response.status, errorText),
           result: null,
           expiresAt: null,
+          timing: null,
         },
         status: 200,
       };
@@ -540,6 +593,7 @@ export async function handleVerifyPoll(
           }),
           error: poll.error ?? null,
           expiresAt: poll.expires_at ?? null,
+          timing: mapBackendTiming(poll.timing),
         },
         status: 200,
       };
@@ -553,6 +607,7 @@ export async function handleVerifyPoll(
           error: poll.status === 'expired' ? EXPIRED_JOB_MESSAGE : poll.error ?? 'Verification job failed.',
           result: null,
           expiresAt: poll.expires_at ?? null,
+          timing: mapBackendTiming(poll.timing),
         },
         status: 200,
       };
@@ -565,6 +620,7 @@ export async function handleVerifyPoll(
         result: null,
         error: poll.error ?? null,
         expiresAt: poll.expires_at ?? null,
+        timing: mapBackendTiming(poll.timing),
       },
       status: 200,
     };

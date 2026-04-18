@@ -56,6 +56,45 @@ version_lte() {
   printf '%s\n%s\n' "$v1" "$v2" | sort -V -C
 }
 
+patch_repl_stdout_flush_for_v490() {
+  local repl_root="$1"
+  local main_lean="${repl_root}/REPL/Main.lean"
+
+  python - "$main_lean" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+if 'printFlush "\\n" -- easier to parse the output if there are blank lines' in text:
+    raise SystemExit(0)
+
+helper = """/-- Avoid buffering the output. -/
+def printFlush [ToString α] (s : α) : IO Unit := do
+  let out ← IO.getStdout
+  out.putStr (toString s)
+  out.flush -- Flush the output
+
+"""
+
+if "def printFlush [ToString α] (s : α) : IO Unit := do" not in text:
+    marker = "/-- Read-eval-print loop for Lean. -/"
+    idx = text.find(marker)
+    if idx == -1:
+        raise SystemExit("failed to locate REPL loop marker in REPL/Main.lean")
+    text = text[:idx] + helper + text[idx:]
+
+old = '  IO.println "" -- easier to parse the output if there are blank lines'
+new = '  printFlush "\\n" -- easier to parse the output if there are blank lines'
+if old not in text:
+    raise SystemExit("failed to locate newline terminator line in REPL/Main.lean")
+text = text.replace(old, new, 1)
+
+path.write_text(text)
+PY
+}
+
 install_repo() {
   local name="$1" url="$2" branch="$3" upd_manifest="$4"
   echo "Installing ${name}@${branch}..."
@@ -73,6 +112,9 @@ install_repo() {
       git checkout --force --detach "refs/tags/${branch}"
     else
       git checkout --force "${branch}"
+    fi
+    if [ "$name" = "repl" ] && [ "$branch" = "v4.9.0" ]; then
+      patch_repl_stdout_flush_for_v490 "$PWD"
     fi
     if [ "$name" = "mathlib4" ]; then
       lake exe cache get

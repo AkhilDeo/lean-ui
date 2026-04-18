@@ -37,6 +37,29 @@ async def test_direct_repl_import_mathlib_smoke() -> None:
         await repl.close()
 
 
+@pytest.mark.asyncio
+async def test_direct_repl_noninteractive_command_roundtrip_smoke() -> None:
+    """
+    Regression guard for command-stream stalls: a simple non-interactive command must
+    produce a JSON response promptly instead of hanging until timeout.
+    """
+    _require_real_repl_runtime()
+
+    repl = await Repl.create("", 1, 8192)
+    try:
+        await repl.start()
+        response = await repl.send_timeout(
+            Snippet(id="roundtrip-smoke", code="example : 1 + 1 = 2 := by\n  decide\n"),
+            timeout=30,
+            is_header=False,
+        )
+        assert response.error is None
+        assert response.response is not None
+        assert "env" in response.response
+    finally:
+        await repl.close()
+
+
 def _real_app(*, async_enabled: bool) -> Settings:
     settings = Settings(_env_file=None)
     settings.environment = Environment.prod

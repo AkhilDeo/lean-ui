@@ -241,8 +241,11 @@ async def test_timeout(client: TestClient) -> None:
     indirect=True,  # To parametrize fixture
 )
 async def test_exhausted(client: TestClient) -> None:
+    def with_mathlib(body: str) -> str:
+        return f"import Mathlib\n{body}"
+
     payload = CheckRequest(
-        snippets=[Snippet(id="1", code="#check Nat")], debug=True
+        snippets=[Snippet(id="1", code=with_mathlib("#check Nat"))], debug=True
     ).model_dump()
 
     try:
@@ -255,7 +258,7 @@ async def test_exhausted(client: TestClient) -> None:
     repl_uuid = resp.json()["results"][0]["diagnostics"]["repl_uuid"]
 
     payload = CheckRequest(
-        snippets=[Snippet(id="2", code="#check 0")], debug=True
+        snippets=[Snippet(id="2", code=with_mathlib("#check 0"))], debug=True
     ).model_dump()
 
     try:
@@ -268,7 +271,7 @@ async def test_exhausted(client: TestClient) -> None:
     assert repl_uuid == resp.json()["results"][0]["diagnostics"]["repl_uuid"]
 
     payload = CheckRequest(
-        snippets=[Snippet(id="3", code="#check 1")], debug=True
+        snippets=[Snippet(id="3", code=with_mathlib("#check 1"))], debug=True
     ).model_dump()
 
     try:
@@ -281,7 +284,7 @@ async def test_exhausted(client: TestClient) -> None:
     assert repl_uuid == resp.json()["results"][0]["diagnostics"]["repl_uuid"]
 
     payload = CheckRequest(
-        snippets=[Snippet(id="4", code="#check 2")], debug=True
+        snippets=[Snippet(id="4", code=with_mathlib("#check 2"))], debug=True
     ).model_dump()
 
     try:
@@ -303,12 +306,15 @@ async def test_exhausted(client: TestClient) -> None:
     indirect=True,  # To parametrize fixture
 )
 async def test_exhausted_with_batch(client: TestClient) -> None:
+    def with_mathlib(body: str) -> str:
+        return f"import Mathlib\n{body}"
+
     payload = CheckRequest(
         snippets=[
-            Snippet(id="1", code="#check Nat"),
-            Snippet(id="2", code="#check 0"),
-            Snippet(id="3", code="#check 1"),
-            Snippet(id="4", code="#check 2"),
+            Snippet(id="1", code=with_mathlib("#check Nat")),
+            Snippet(id="2", code=with_mathlib("#check 0")),
+            Snippet(id="3", code=with_mathlib("#check 1")),
+            Snippet(id="4", code=with_mathlib("#check 2")),
         ],
         debug=True,
     ).model_dump()

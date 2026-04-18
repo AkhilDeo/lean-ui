@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from time import time
 
@@ -13,6 +14,40 @@ from .errors import NoAvailableReplError, ReplError
 from .repl import Repl, close_verbose
 from .settings import settings
 from .utils import is_blank
+
+
+@dataclass(frozen=True)
+class WarmTargetStatus:
+    header: str
+    target: int
+    reached: int
+    attempts: int
+    success: bool
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class WarmPoolStatus:
+    success: bool
+    targets: list[WarmTargetStatus]
+    reason: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "success": self.success,
+            "reason": self.reason,
+            "targets": [
+                {
+                    "header": target.header,
+                    "target": target.target,
+                    "reached": target.reached,
+                    "attempts": target.attempts,
+                    "success": target.success,
+                    "error": target.error,
+                }
+                for target in self.targets
+            ],
+        }
 
 
 class Manager:
@@ -291,10 +326,26 @@ class Manager:
 
     async def ensure_warm_repls(
         self, targets: dict[str, int], *, timeout: float = 60.0
-    ) -> None:
+    ) -> WarmPoolStatus:
+        results: list[WarmTargetStatus] = []
+        first_failure: str | None = None
+
         for header, target in targets.items():
             if target <= 0:
+                reached = await self.count_free_started_repls({header})
+                results.append(
+                    WarmTargetStatus(
+                        header=header,
+                        target=target,
+                        reached=reached,
+                        attempts=0,
+                        success=True,
+                        error=None,
+                    )
+                )
                 continue
+            attempts = 0
+            failure: str | None = None
             while True:
                 current = await self.count_free_started_repls({header})
                 if current >= target:
@@ -304,13 +355,24 @@ class Manager:
                 async with self._cond:
                     total = len(self._free) + len(self._busy)
                     if total >= self.max_repls:
+                        failure = (
+                            f"Warm pool target '{header}' blocked by max_repls "
+                            f"({current}/{target}, max={self.max_repls})"
+                        )
+                        logger.warning(failure)
                         break
-                repl = await self.get_repl(
-                    header=header,
-                    snippet_id="warm-pool",
-                    timeout=timeout,
-                    reuse=False,
-                )
+                attempts += 1
+                try:
+                    repl = await self.get_repl(
+                        header=header,
+                        snippet_id="warm-pool",
+                        timeout=timeout,
+                        reuse=False,
+                    )
+                except Exception as e:
+                    failure = f"Warm pool failed to allocate REPL for '{header}': {e}"
+                    logger.warning(failure)
+                    break
                 try:
                     prep = await self.prep(
                         repl,
@@ -319,12 +381,37 @@ class Manager:
                         debug=False,
                     )
                     if prep and prep.error:
+                        failure = f"Warm pool header failed for '{header}': {prep.error}"
+                        logger.warning(failure)
                         await self.destroy_repl(repl)
                         break
-                except Exception:
+                except Exception as e:
+                    failure = f"Warm pool prep failed for '{header}': {e}"
+                    logger.warning(failure)
                     await self.destroy_repl(repl)
                     break
                 await self.release_repl(repl)
+
+            reached = await self.count_free_started_repls({header})
+            success = reached >= target and failure is None
+            if not success and failure is None:
+                failure = f"Warm pool target '{header}' not reached ({reached}/{target})"
+            if not success and first_failure is None:
+                first_failure = failure
+            results.append(
+                WarmTargetStatus(
+                    header=header,
+                    target=target,
+                    reached=reached,
+                    attempts=attempts,
+                    success=success,
+                    error=failure,
+                )
+            )
+
+        success = all(result.success for result in results)
+        reason = None if success else first_failure or "Warm pool targets were not reached"
+        return WarmPoolStatus(success=success, targets=results, reason=reason)
 
     def drain_startup_stats(self) -> dict[str, int]:
         snapshot = {

@@ -75,14 +75,24 @@ class RuntimeGateway:
             raise HTTPException(status_code=400, detail=f"Unknown runtime_id: {runtime_id}")
         return runtime
 
-    async def is_runtime_warm(self, runtime: RuntimeDescriptor) -> bool:
+    async def is_runtime_warm(
+        self,
+        runtime: RuntimeDescriptor,
+        *,
+        timeout_sec: float | None = None,
+    ) -> bool:
         if not runtime.base_url:
             return False
+        timeout = (
+            float(timeout_sec)
+            if timeout_sec is not None
+            else float(self._settings.gateway_sync_proxy_timeout_sec)
+        )
         try:
             response = await self._http.get(
                 f"{runtime.base_url.rstrip('/')}/health",
                 headers=_build_auth_headers(self._settings.api_key),
-                timeout=float(self._settings.gateway_sync_proxy_timeout_sec),
+                timeout=timeout,
             )
         except Exception:
             return False

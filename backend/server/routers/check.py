@@ -17,6 +17,7 @@ from ..repl import Repl
 from ..runtime_gateway import RuntimeGateway
 from ..settings import Settings, settings as default_settings
 from ..split import split_snippet
+from ..utils import is_blank
 
 router = APIRouter()
 TaskResultT = TypeVar("TaskResultT")
@@ -134,8 +135,18 @@ async def run_checks(
             header = split_result.header
             body = split_result.body
             header_line_count = split_result.header_line_count
+            allow_reuse = reuse and not is_blank(header)
+            if reuse and not allow_reuse:
+                logger.debug(
+                    "Disabling REPL reuse for snippet '{}' because no stable import header was found",
+                    snippet.id,
+                )
             try:
-                repl = await manager.get_repl(header, snippet.id, reuse=reuse)
+                repl = await manager.get_repl(
+                    header,
+                    snippet.id,
+                    reuse=allow_reuse,
+                )
             except NoAvailableReplError:
                 logger.exception("No available REPLs")
                 raise HTTPException(429, "No available REPLs") from None
