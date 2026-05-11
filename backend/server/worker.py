@@ -147,6 +147,7 @@ async def process_task(
     circuit_breaker: AsyncCircuitBreaker | None = None,
     runtime_id: str | None = None,
     runtime_managers: RuntimeManagerRegistry | None = None,
+    repl_start_timeout_sec: float = 300.0,
 ) -> bool:
     effective_policy = policy or AsyncWorkerPolicy.from_settings(Settings())
     task = await jobs.dequeue_task(
@@ -206,7 +207,9 @@ async def process_task(
                         reuse=task.reuse,
                         infotree=task.infotree,
                     ),
-                    timeout=_task_attempt_timeout(task.timeout),
+                    timeout=_task_attempt_timeout(
+                        task.timeout, repl_start_timeout_sec=repl_start_timeout_sec
+                    ),
                 )
                 await jobs.mark_task_success(task, responses[0])
                 if circuit_breaker is not None:
@@ -426,8 +429,8 @@ async def process_task(
     return True
 
 
-def _task_attempt_timeout(timeout: float) -> float:
-    return max(timeout, 1.0) + 30.0
+def _task_attempt_timeout(timeout: float, *, repl_start_timeout_sec: float) -> float:
+    return max(timeout, 1.0) + max(repl_start_timeout_sec, 0.0) + 30.0
 
 
 async def _warm_pool_loop(
@@ -469,6 +472,7 @@ async def _consumer_loop(
     circuit_breaker: AsyncCircuitBreaker | None,
     warm_targets: dict[str, int],
     runtime_id: str,
+    repl_start_timeout_sec: float,
     runtime_managers: RuntimeManagerRegistry | None = None,
 ) -> None:
     queue_tier = (
@@ -497,6 +501,7 @@ async def _consumer_loop(
                 circuit_breaker=circuit_breaker,
                 runtime_id=runtime_id,
                 runtime_managers=runtime_managers,
+                repl_start_timeout_sec=repl_start_timeout_sec,
             )
             if manager is not None:
                 await _record_manager_metrics(
@@ -589,6 +594,7 @@ async def run_worker(
                 circuit_breaker=circuit_breaker,
                 warm_targets=warm_targets,
                 runtime_id=None if runtime_managers is not None else cfg.runtime_id,
+                repl_start_timeout_sec=cfg.max_wait,
                 runtime_managers=runtime_managers,
             ),
             name=f"async-worker-consumer-{i + 1}",

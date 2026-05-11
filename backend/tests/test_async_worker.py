@@ -96,7 +96,10 @@ async def test_worker_process_task_has_hard_attempt_timeout(
         return [ReplResponse(id="s1", time=0.1, response={"env": 0})]
 
     monkeypatch.setattr("server.worker.run_checks", fake_run_checks)
-    monkeypatch.setattr("server.worker._task_attempt_timeout", lambda timeout: 0.01)
+    monkeypatch.setattr(
+        "server.worker._task_attempt_timeout",
+        lambda timeout, *, repl_start_timeout_sec: 0.01,
+    )
 
     did_work = await process_task(
         jobs=jobs,
@@ -204,6 +207,7 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
         circuit_breaker,
         warm_targets,
         runtime_id,
+        repl_start_timeout_sec,
         runtime_managers,
     ) -> None:
         _ = (
@@ -215,6 +219,7 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
             circuit_breaker,
             warm_targets,
             runtime_id,
+            repl_start_timeout_sec,
             runtime_managers,
         )
         started.add(consumer_id)
