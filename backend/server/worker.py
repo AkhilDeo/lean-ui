@@ -197,13 +197,16 @@ async def process_task(
             task.retry_count = attempt - 1
             task.failure_reason = None
             try:
-                responses = await run_checks(
-                    [task.snippet],
-                    timeout=task.timeout,
-                    debug=task.debug,
-                    manager=task_manager,
-                    reuse=task.reuse,
-                    infotree=task.infotree,
+                responses = await asyncio.wait_for(
+                    run_checks(
+                        [task.snippet],
+                        timeout=task.timeout,
+                        debug=task.debug,
+                        manager=task_manager,
+                        reuse=task.reuse,
+                        infotree=task.infotree,
+                    ),
+                    timeout=_task_attempt_timeout(task.timeout),
                 )
                 await jobs.mark_task_success(task, responses[0])
                 if circuit_breaker is not None:
@@ -305,6 +308,34 @@ async def process_task(
                     time.perf_counter() - started_at,
                 )
                 return True
+            except asyncio.TimeoutError:
+                detail = (
+                    "worker_error: Task exceeded worker attempt timeout "
+                    f"({task.timeout:.1f}s Lean timeout)"
+                )
+                task.failure_reason = "worker_attempt_timeout"
+                task.retry_count = attempt
+                await jobs.record_worker_metrics(
+                    queue_tier=queue_tier,
+                    runtime_id=task.runtime_id,
+                    exhausted_retries=1,
+                    failure_reason=task.failure_reason,
+                )
+                if circuit_breaker is not None:
+                    await circuit_breaker.note_attempt(True)
+                await jobs.mark_task_failure(task, detail, task.snippet.id)
+                logger.error(
+                    "Worker task exceeded hard attempt timeout: consumer_id={} job_id={} task_id={} index={} snippet_id={} attempt={}/{} elapsed_sec={:.3f}",
+                    consumer_id,
+                    task.job_id,
+                    task.task_id,
+                    task.index,
+                    task.snippet.id,
+                    attempt,
+                    attempts,
+                    time.perf_counter() - started_at,
+                )
+                return True
             except Exception as e:
                 detail = f"worker_error: {e}"
                 failure_reason = _normalize_failure_reason(detail)
@@ -393,6 +424,10 @@ async def process_task(
                 )
                 return True
     return True
+
+
+def _task_attempt_timeout(timeout: float) -> float:
+    return max(timeout, 1.0) + 30.0
 
 
 async def _warm_pool_loop(

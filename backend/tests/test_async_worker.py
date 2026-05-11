@@ -80,6 +80,42 @@ async def test_worker_process_task_http_error(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
+async def test_worker_process_task_has_hard_attempt_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10)
+    submit = await jobs.submit(
+        CheckRequest(
+            snippets=[Snippet(id="s1", code="import Mathlib\n#check Nat")], timeout=30
+        )
+    )
+
+    async def fake_run_checks(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        await asyncio.sleep(10)
+        return [ReplResponse(id="s1", time=0.1, response={"env": 0})]
+
+    monkeypatch.setattr("server.worker.run_checks", fake_run_checks)
+    monkeypatch.setattr("server.worker._task_attempt_timeout", lambda timeout: 0.01)
+
+    did_work = await process_task(
+        jobs=jobs,
+        manager=object(),
+        task_timeout_sec=1,
+        policy=AsyncWorkerPolicy.from_settings(Settings(_env_file=None)),
+    )
+    assert did_work is True
+
+    poll = await jobs.poll(submit.job_id)
+    assert poll is not None
+    assert poll.progress.failed == 1
+    assert poll.results is not None
+    assert poll.results[0].error is not None
+    assert "Task exceeded worker attempt timeout" in poll.results[0].error
+    assert jobs._results[submit.job_id][0]["failure_reason"] == "worker_attempt_timeout"
+
+
+@pytest.mark.asyncio
 async def test_worker_retries_transient_http_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
