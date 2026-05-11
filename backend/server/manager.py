@@ -301,7 +301,7 @@ class Manager:
 
         try:
             return await self.start_new(header, reservation=reservation)
-        except Exception:
+        except BaseException:
             if reservation is not None:
                 await reservation.release()
             raise
@@ -367,7 +367,7 @@ class Manager:
                 repl_path=self.repl_path,
                 project_dir=self.project_dir,
             )
-        except Exception:
+        except BaseException:
             await self._finish_failed_start()
             raise
 

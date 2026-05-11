@@ -143,6 +143,37 @@ async def test_shared_capacity_pool_bounds_multiple_managers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancelled_repl_create_releases_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = ReplCapacityPool(limit=1)
+    manager = Manager(
+        max_repls=1,
+        max_repl_uses=1,
+        max_repl_mem=10,
+        min_host_free_mem=4,
+        capacity_pool=pool,
+    )
+    started = asyncio.Event()
+
+    async def fake_create(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args, kwargs
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("server.manager.Repl.create", fake_create)
+
+    task = asyncio.create_task(manager.get_repl(timeout=1.0))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert await pool.in_use() == 0
+    assert manager._starting == 0
+
+
+@pytest.mark.asyncio
 async def test_ensure_warm_repls_refills_missing_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
