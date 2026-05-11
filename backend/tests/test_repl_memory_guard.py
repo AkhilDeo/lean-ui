@@ -143,6 +143,37 @@ async def test_shared_capacity_pool_bounds_multiple_managers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_shared_capacity_pool_reclaims_idle_repls_for_other_managers() -> None:
+    pool = ReplCapacityPool(limit=1)
+    first = Manager(
+        max_repls=1,
+        max_repl_uses=1,
+        max_repl_mem=10,
+        min_host_free_mem=4,
+        capacity_pool=pool,
+    )
+    second = Manager(
+        max_repls=1,
+        max_repl_uses=1,
+        max_repl_mem=10,
+        min_host_free_mem=4,
+        capacity_pool=pool,
+    )
+    pool.register_reclaimer(first.close_one_free_repl)
+    pool.register_reclaimer(second.close_one_free_repl)
+
+    repl = await first.get_repl(timeout=1.0)
+    await first.release_repl(repl)
+
+    replacement = await second.get_repl(timeout=1.0)
+
+    assert await pool.in_use() == 1
+    assert len(first._free) == 0
+    await second.destroy_repl(replacement)
+    assert await pool.in_use() == 0
+
+
+@pytest.mark.asyncio
 async def test_cancelled_repl_create_releases_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

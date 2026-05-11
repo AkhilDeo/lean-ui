@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import time
+from typing import Awaitable, Callable
 
 from kimina_client import ReplResponse, Snippet
 from loguru import logger
@@ -35,10 +36,20 @@ class ReplCapacityPool:
         self.limit = limit
         self._in_use = 0
         self._cond: asyncio.Condition | None = None
+        self._reclaimers: list[Callable[[], Awaitable[bool]]] = []
 
     def _ensure_cond(self) -> None:
         if self._cond is None:
             self._cond = asyncio.Condition()
+
+    def register_reclaimer(self, reclaimer: Callable[[], Awaitable[bool]]) -> None:
+        self._reclaimers.append(reclaimer)
+
+    async def _reclaim_one(self) -> bool:
+        for reclaimer in list(self._reclaimers):
+            if await reclaimer():
+                return True
+        return False
 
     async def acquire(self, *, timeout: float) -> ReplCapacityReservation:
         if self.limit is None:
@@ -46,8 +57,19 @@ class ReplCapacityPool:
         self._ensure_cond()
         assert self._cond is not None
         deadline = time() + timeout
-        async with self._cond:
-            while self._in_use >= self.limit:
+        while True:
+            async with self._cond:
+                if self._in_use < self.limit:
+                    self._in_use += 1
+                    return ReplCapacityReservation(self)
+                remaining = deadline - time()
+                if remaining <= 0:
+                    raise NoAvailableReplError(
+                        f"Timed out waiting for global REPL capacity ({self.limit})"
+                    )
+            if await self._reclaim_one():
+                continue
+            async with self._cond:
                 remaining = deadline - time()
                 if remaining <= 0:
                     raise NoAvailableReplError(
@@ -59,8 +81,6 @@ class ReplCapacityPool:
                     raise NoAvailableReplError(
                         f"Timed out waiting for global REPL capacity ({self.limit})"
                     ) from None
-            self._in_use += 1
-        return ReplCapacityReservation(self)
 
     async def release(self) -> None:
         self._ensure_cond()
@@ -328,6 +348,19 @@ class Manager:
                 self._free.remove(repl)
             await self._close_repl(repl)
             self._cond.notify(1)
+
+    async def close_one_free_repl(self) -> bool:
+        self._ensure_lock()
+        assert self._cond is not None
+        async with self._cond:
+            if not self._free:
+                return False
+            oldest = min(self._free, key=lambda r: r.last_check_at)
+            self._free.remove(oldest)
+            await self._close_repl(oldest)
+            self._cond.notify(1)
+            logger.info("Reclaimed idle REPL for global capacity")
+            return True
 
     async def release_repl(self, repl: Repl) -> None:
         self._ensure_lock()

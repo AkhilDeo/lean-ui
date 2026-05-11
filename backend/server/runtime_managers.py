@@ -94,6 +94,7 @@ class RuntimeManagerRegistry:
                 project_dir=project_dir,
                 capacity_pool=self._capacity_pool,
             )
+            self._capacity_pool.register_reclaimer(manager.close_one_free_repl)
             self._managers[runtime_id] = manager
             return manager
 

@@ -132,6 +132,9 @@ def test_multi_runtime_manager_creation_is_single_flight(tmp_path, monkeypatch) 
             self.kwargs = kwargs
             created.append(self)
 
+        async def close_one_free_repl(self) -> bool:
+            return False
+
     monkeypatch.setattr("server.runtime_managers.Manager", FakeManager)
     managers = RuntimeManagerRegistry(settings, registry)
 
