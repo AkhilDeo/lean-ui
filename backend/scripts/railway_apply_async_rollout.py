@@ -15,7 +15,7 @@ BACKEND_DIR = SCRIPT_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from server.runtime_registry import seeded_runtime_ids
+from server.runtime_registry import seeded_runtime_ids  # noqa: E402
 
 PROJECT_ID = "0aa8564f-7dab-476a-94d9-0de8fb381c9f"
 ENVIRONMENT_ID = "9ac4affd-7f62-415d-9c34-d2748db92462"
@@ -24,6 +24,7 @@ GATEWAY_SERVICE_NAME = "lean-ui"
 REGION = "us-east4-eqdc4a"
 REPO = "AkhilDeo/lean-ui"
 REDIS_SERVICE_NAME = "lean-ui-redis"
+WORKER_SERVICE_NAME = "lean-ui-worker"
 REDIS_TEMPLATE_ID = "895cb7c9-8ea9-4407-b4b6-b5013a65145e"
 DEFAULT_RUNTIME_ID = "v4.9.0"
 API_URL = "https://backboard.railway.com/graphql/v2"
@@ -37,6 +38,7 @@ RUNTIME_SERVICE_NAMES = {
 }
 DEFAULT_RUNTIME_MAX_REPLS = "4"
 DEFAULT_RUNTIME_WORKER_CONCURRENCY = "2"
+DEFAULT_GLOBAL_MAX_REPLS = "3"
 DEFAULT_RUNTIME_LIGHT_WARM_REPLS = json.dumps({"import Mathlib": 2})
 DEFAULT_RUNTIME_HEAVY_WARM_REPLS = json.dumps(
     {"import Mathlib": 1, "import Mathlib\nimport Aesop": 1}
@@ -347,6 +349,7 @@ def delete_service(client: RailwayClient, *, service_id: str) -> None:
 def configure_single_service(
     client: RailwayClient,
     *,
+    redis_url: str,
     api_key: str,
     autoscale_token: str,
 ) -> None:
@@ -373,16 +376,18 @@ def configure_single_service(
         "LEAN_SERVER_API_KEY": api_key,
         "LEAN_SERVER_GATEWAY_ENABLED": "false",
         "LEAN_SERVER_MULTI_RUNTIME_ENABLED": "true",
-        "LEAN_SERVER_EMBEDDED_WORKER_ENABLED": "true",
+        "LEAN_SERVER_EMBEDDED_WORKER_ENABLED": "false",
         "LEAN_SERVER_ASYNC_ENABLED": "true",
-        "LEAN_SERVER_ASYNC_USE_IN_MEMORY_BACKEND": "true",
+        "LEAN_SERVER_ASYNC_USE_IN_MEMORY_BACKEND": "false",
+        "LEAN_SERVER_REDIS_URL": redis_url,
         "LEAN_SERVER_ASYNC_METRICS_ENABLED": "true",
         "LEAN_SERVER_DEFAULT_RUNTIME_ID": DEFAULT_RUNTIME_ID,
         "LEAN_SERVER_RUNTIME_ID": DEFAULT_RUNTIME_ID,
         "LEAN_SERVER_LEAN_VERSION": DEFAULT_RUNTIME_ID,
         "LEAN_SERVER_RUNTIME_IDS": ",".join(seeded_runtime_ids()),
         "LEAN_SERVER_RUNTIME_ROOT": "/runtimes",
-        "LEAN_SERVER_MAX_REPLS": "1",
+        "LEAN_SERVER_MAX_REPLS": "2",
+        "LEAN_SERVER_MAX_TOTAL_REPLS": "2",
         "LEAN_SERVER_MAX_REPL_MEM": "8G",
         "LEAN_SERVER_MAX_WAIT": "300",
         "LEAN_SERVER_INIT_REPLS": "{}",
@@ -407,6 +412,60 @@ def configure_single_service(
     upsert_variables(client, service_id=GATEWAY_SERVICE_ID, variables=service_vars)
 
 
+def configure_worker_service(
+    client: RailwayClient,
+    *,
+    service_id: str,
+    redis_url: str,
+    api_key: str,
+    autoscale_token: str,
+) -> None:
+    update_service_instance(
+        client,
+        service_id=service_id,
+        input_payload={
+            "rootDirectory": "/backend",
+            "railwayConfigFile": "/backend/railway.worker.toml",
+            "dockerfilePath": "Dockerfile",
+            "startCommand": "python -m server.worker",
+            "sleepApplication": False,
+            "restartPolicyType": "ON_FAILURE",
+            "restartPolicyMaxRetries": 3,
+            "multiRegionConfig": {REGION: {"numReplicas": 1}},
+        },
+    )
+    update_limits(client, service_id=service_id, vcpus=4, memory_gb=32)
+
+    worker_vars = build_common_async_vars(
+        redis_url=redis_url,
+        api_key=api_key,
+        autoscale_token=autoscale_token,
+    )
+    worker_vars.update(
+        {
+            "LEAN_SERVER_GATEWAY_ENABLED": "false",
+            "LEAN_SERVER_MULTI_RUNTIME_ENABLED": "true",
+            "LEAN_SERVER_EMBEDDED_WORKER_ENABLED": "false",
+            "LEAN_SERVER_DEFAULT_RUNTIME_ID": DEFAULT_RUNTIME_ID,
+            "LEAN_SERVER_RUNTIME_ID": DEFAULT_RUNTIME_ID,
+            "LEAN_SERVER_LEAN_VERSION": DEFAULT_RUNTIME_ID,
+            "LEAN_SERVER_RUNTIME_IDS": ",".join(seeded_runtime_ids()),
+            "LEAN_SERVER_RUNTIME_ROOT": "/runtimes",
+            "LEAN_SERVER_MAX_REPLS": DEFAULT_RUNTIME_MAX_REPLS,
+            "LEAN_SERVER_MAX_TOTAL_REPLS": DEFAULT_GLOBAL_MAX_REPLS,
+            "LEAN_SERVER_MAX_REPL_MEM": "8G",
+            "LEAN_SERVER_INIT_REPLS": "{}",
+            "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY": DEFAULT_GLOBAL_MAX_REPLS,
+            "LEAN_SERVER_ASYNC_WORKER_QUEUE_TIER": "all",
+            "LEAN_SERVER_ASYNC_LIGHT_RETRY_ATTEMPTS": "5",
+            "LEAN_SERVER_ASYNC_HEAVY_RETRY_ATTEMPTS": "7",
+            "LEAN_SERVER_ASYNC_LIGHT_WARM_REPLS": DEFAULT_RUNTIME_LIGHT_WARM_REPLS,
+            "LEAN_SERVER_ASYNC_HEAVY_WARM_REPLS": DEFAULT_RUNTIME_HEAVY_WARM_REPLS,
+        }
+    )
+    upsert_variables(client, service_id=service_id, variables=worker_vars)
+
+
 def configure_gateway_service(
     client: RailwayClient,
     *,
@@ -418,6 +477,7 @@ def configure_gateway_service(
 ) -> None:
     configure_single_service(
         client,
+        redis_url=redis_url,
         api_key=api_key,
         autoscale_token=autoscale_token,
     )
@@ -521,24 +581,41 @@ def main() -> int:
     api_key = gateway_vars.get("LEAN_SERVER_API_KEY")
     if not api_key:
         raise RuntimeError("Gateway service is missing LEAN_SERVER_API_KEY")
+    redis_id = create_redis_if_missing(client, services)
+    services = get_services(client)
+    redis_vars = get_service_variables(client, service_id=redis_id)
+    redis_url = choose_redis_url(redis_vars)
+    worker_id = create_service_if_missing(client, services, WORKER_SERVICE_NAME)
 
     configure_single_service(
         client,
+        redis_url=redis_url,
+        api_key=api_key,
+        autoscale_token=token,
+    )
+    configure_worker_service(
+        client,
+        service_id=worker_id,
+        redis_url=redis_url,
         api_key=api_key,
         autoscale_token=token,
     )
     redeploy(client, service_id=GATEWAY_SERVICE_ID)
+    redeploy(client, service_id=worker_id)
     wait_for_success(client, service_id=GATEWAY_SERVICE_ID)
+    wait_for_success(client, service_id=worker_id)
 
     services = get_services(client)
     for name, service_id in sorted(services.items()):
-        if service_id == GATEWAY_SERVICE_ID:
+        if service_id in {GATEWAY_SERVICE_ID, redis_id, worker_id}:
             continue
         print(f"deleting_service name={name} service_id={service_id}")
         delete_service(client, service_id=service_id)
 
     print(f"gateway_domain={get_public_domain(client, service_id=GATEWAY_SERVICE_ID)}")
-    print("Railway single-service rollout completed.")
+    print(f"redis_service={redis_id}")
+    print(f"worker_service={worker_id}")
+    print("Railway Redis-backed worker rollout completed.")
     return 0
 
 

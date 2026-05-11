@@ -125,6 +125,7 @@ KIMINA_SERVER_API_KEY=your-shared-backend-key
 LEAN_SERVER_LEAN_VERSION=v4.9.0   # Runtime Lean version
 LEAN_SERVER_RUNTIME_ID=v4.9.0     # Runtime registry id
 LEAN_SERVER_MAX_REPLS=14           # Max concurrent REPL instances
+LEAN_SERVER_MAX_TOTAL_REPLS=14     # Optional process-wide cap across runtime managers
 LEAN_SERVER_MAX_WAIT=60            # Max wait time in seconds
 ```
 

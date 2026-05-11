@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import signal
 from collections import namedtuple
 from unittest.mock import MagicMock, patch
@@ -10,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from server.errors import NoAvailableReplError
-from server.manager import Manager
+from server.manager import Manager, ReplCapacityPool
 from server.repl import Repl
 
 
@@ -76,6 +75,62 @@ async def test_startup_semaphore_limits_concurrent_cold_starts() -> None:
     )
 
     assert max_started == 1
+
+
+@pytest.mark.asyncio
+async def test_manager_counts_concurrent_starting_repls_against_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = Manager(max_repls=1, max_repl_uses=1, max_repl_mem=10, min_host_free_mem=4)
+    created = 0
+    release_first = asyncio.Event()
+    original_create = Repl.create
+
+    async def fake_create(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal created
+        _ = args, kwargs
+        created += 1
+        await release_first.wait()
+        return await original_create("", 1, 10)
+
+    monkeypatch.setattr("server.manager.Repl.create", fake_create)
+
+    first = asyncio.create_task(manager.get_repl(timeout=1.0))
+    await asyncio.sleep(0)
+
+    with pytest.raises(NoAvailableReplError, match="waiting for a REPL"):
+        await manager.get_repl(timeout=0.01)
+
+    release_first.set()
+    repl = await first
+    assert created == 1
+    await manager.destroy_repl(repl)
+
+
+@pytest.mark.asyncio
+async def test_shared_capacity_pool_bounds_multiple_managers() -> None:
+    pool = ReplCapacityPool(limit=1)
+    first = Manager(
+        max_repls=1,
+        max_repl_uses=1,
+        max_repl_mem=10,
+        min_host_free_mem=4,
+        capacity_pool=pool,
+    )
+    second = Manager(
+        max_repls=1,
+        max_repl_uses=1,
+        max_repl_mem=10,
+        min_host_free_mem=4,
+        capacity_pool=pool,
+    )
+
+    repl = await first.get_repl(timeout=1.0)
+    with pytest.raises(NoAvailableReplError, match="global REPL capacity"):
+        await second.get_repl(timeout=0.01)
+
+    await first.destroy_repl(repl)
+    assert await pool.in_use() == 0
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from .async_tiering import AsyncQueueTier, warm_repl_targets_for_tier
 from .logger import setup_logging
 from .manager import Manager
 from .routers.check import run_checks
+from .runtime_registry import build_runtime_registry, validate_runtime_configuration
 from .runtime_managers import RuntimeManagerRegistry
 from .settings import Settings
 
@@ -99,7 +100,7 @@ async def _record_manager_metrics(
     manager: Manager,
     queue_tier: AsyncQueueTier,
     warm_targets: dict[str, int],
-    runtime_id: str,
+    runtime_id: str | None,
 ) -> None:
     stats = manager.drain_startup_stats()
     warm_repls = await manager.count_free_started_repls(set(warm_targets))
@@ -119,7 +120,7 @@ async def _maybe_pause_for_circuit_breaker(
     manager: Manager,
     queue_tier: AsyncQueueTier,
     warm_targets: dict[str, int],
-    runtime_id: str,
+    runtime_id: str | None,
 ) -> None:
     if breaker is None:
         return
@@ -400,7 +401,7 @@ async def _warm_pool_loop(
     manager: Manager,
     policy: AsyncWorkerPolicy,
     warm_targets: dict[str, int],
-    runtime_id: str,
+    runtime_id: str | None,
 ) -> None:
     queue_tier = (
         policy.worker_queue_tier
@@ -574,6 +575,8 @@ async def run_worker(
         if manage_resources and owned_manager:
             assert manager is not None
             await manager.cleanup()
+        if manage_resources and runtime_managers is not None:
+            await runtime_managers.cleanup()
         if manage_resources and owned_jobs:
             await jobs.close()
 
@@ -581,7 +584,12 @@ async def run_worker(
 def main() -> None:
     cfg = Settings()
     setup_logging(cfg)
-    asyncio.run(run_worker(cfg))
+    runtime_managers = None
+    if cfg.multi_runtime_enabled:
+        runtime_registry = build_runtime_registry(cfg.default_runtime_id, env={})
+        validate_runtime_configuration(cfg, runtime_registry)
+        runtime_managers = RuntimeManagerRegistry(cfg, runtime_registry)
+    asyncio.run(run_worker(cfg, runtime_managers=runtime_managers))
 
 
 if __name__ == "__main__":

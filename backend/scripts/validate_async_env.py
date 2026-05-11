@@ -11,7 +11,7 @@ BACKEND_DIR = SCRIPT_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from server.runtime_registry import seeded_runtime_ids
+from server.runtime_registry import seeded_runtime_ids  # noqa: E402
 
 COMMON_REQUIRED = {
     "LEAN_SERVER_ENVIRONMENT",
@@ -43,6 +43,7 @@ SINGLE_SERVICE_REQUIRED = {
     "LEAN_SERVER_RUNTIME_IDS",
     "LEAN_SERVER_RUNTIME_ROOT",
     "LEAN_SERVER_MAX_REPLS",
+    "LEAN_SERVER_MAX_TOTAL_REPLS",
     "LEAN_SERVER_MAX_REPL_MEM",
     "LEAN_SERVER_INIT_REPLS",
     "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY",
@@ -55,6 +56,7 @@ RUNTIME_REQUIRED = {
     "LEAN_SERVER_RAILWAY_ENVIRONMENT_ID",
     "LEAN_SERVER_EMBEDDED_WORKER_ENABLED",
     "LEAN_SERVER_MAX_REPLS",
+    "LEAN_SERVER_MAX_TOTAL_REPLS",
     "LEAN_SERVER_MAX_REPL_MEM",
     "LEAN_SERVER_INIT_REPLS",
     "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY",
@@ -65,6 +67,7 @@ RUNTIME_REQUIRED = {
 
 API_REQUIRED = {
     "LEAN_SERVER_MAX_REPLS",
+    "LEAN_SERVER_MAX_TOTAL_REPLS",
     "LEAN_SERVER_MAX_REPL_MEM",
     "LEAN_SERVER_INIT_REPLS",
 }
@@ -95,8 +98,8 @@ def required_keys_for_role(role: str) -> set[str]:
         required.update(RUNTIME_REQUIRED)
     elif normalized_role in {"single", "single-service", "api"}:
         required.update(SINGLE_SERVICE_REQUIRED)
-        for runtime_id in seeded_runtime_ids():
-            required.add(f"LEAN_SERVER_RUNTIME_IDS")
+        for _runtime_id in seeded_runtime_ids():
+            required.add("LEAN_SERVER_RUNTIME_IDS")
     else:
         required.update(API_REQUIRED)
     return required

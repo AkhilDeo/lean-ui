@@ -17,6 +17,67 @@ from .settings import settings
 from .utils import is_blank
 
 
+class ReplCapacityReservation:
+    def __init__(self, pool: "ReplCapacityPool | None") -> None:
+        self._pool = pool
+        self._released = False
+
+    async def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        if self._pool is not None:
+            await self._pool.release()
+
+
+class ReplCapacityPool:
+    def __init__(self, limit: int | None) -> None:
+        self.limit = limit
+        self._in_use = 0
+        self._cond: asyncio.Condition | None = None
+
+    def _ensure_cond(self) -> None:
+        if self._cond is None:
+            self._cond = asyncio.Condition()
+
+    async def acquire(self, *, timeout: float) -> ReplCapacityReservation:
+        if self.limit is None:
+            return ReplCapacityReservation(None)
+        self._ensure_cond()
+        assert self._cond is not None
+        deadline = time() + timeout
+        async with self._cond:
+            while self._in_use >= self.limit:
+                remaining = deadline - time()
+                if remaining <= 0:
+                    raise NoAvailableReplError(
+                        f"Timed out waiting for global REPL capacity ({self.limit})"
+                    )
+                try:
+                    await asyncio.wait_for(self._cond.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    raise NoAvailableReplError(
+                        f"Timed out waiting for global REPL capacity ({self.limit})"
+                    ) from None
+            self._in_use += 1
+        return ReplCapacityReservation(self)
+
+    async def release(self) -> None:
+        self._ensure_cond()
+        assert self._cond is not None
+        async with self._cond:
+            self._in_use = max(self._in_use - 1, 0)
+            self._cond.notify(1)
+
+    async def in_use(self) -> int:
+        if self.limit is None:
+            return 0
+        self._ensure_cond()
+        assert self._cond is not None
+        async with self._cond:
+            return self._in_use
+
+
 @dataclass(frozen=True)
 class WarmTargetStatus:
     header: str
@@ -63,6 +124,7 @@ class Manager:
         startup_concurrency_limit: int | None = settings.async_startup_concurrency_limit,
         repl_path: Path = settings.repl_path,
         project_dir: Path = settings.project_dir,
+        capacity_pool: ReplCapacityPool | None = None,
     ) -> None:
         self.max_repls = max_repls
         self.max_repl_uses = max_repl_uses
@@ -72,12 +134,15 @@ class Manager:
         self.startup_concurrency_limit = startup_concurrency_limit
         self.repl_path = Path(repl_path)
         self.project_dir = Path(project_dir)
+        self.capacity_pool = capacity_pool
 
         self._lock: asyncio.Lock | None = None
         self._cond: asyncio.Condition | None = None
         self._startup_semaphore: asyncio.Semaphore | None = None
         self._free: list[Repl] = []
         self._busy: set[Repl] = set()
+        self._starting = 0
+        self._capacity_reservations: dict[Repl, ReplCapacityReservation] = {}
         self._cold_start_count = 0
         self._spawn_failure_count = 0
 
@@ -146,10 +211,12 @@ class Manager:
         assert self._cond is not None  # Type narrowing after _ensure_lock
         deadline = time() + timeout
         repl_to_destroy: Repl | None = None
+        transferred_reservation: ReplCapacityReservation | None = None
+        needs_capacity_reservation = False
         while True:
             async with self._cond:
                 logger.debug(
-                    f"# Free = {len(self._free)} | # Busy = {len(self._busy)} | # Max = {self.max_repls}"
+                    f"# Free = {len(self._free)} | # Busy = {len(self._busy)} | # Starting = {self._starting} | # Max = {self.max_repls}"
                 )
                 if reuse:
                     for i, r in enumerate(self._free):
@@ -163,7 +230,7 @@ class Manager:
                                 f"\\[{repl.uuid.hex[:8]}] Reusing ({'started' if repl.is_running else 'non-started'}) REPL for {snippet_id}"
                             )
                             return repl
-                total = len(self._free) + len(self._busy)
+                total = len(self._free) + len(self._busy) + self._starting
                 if total < self.max_repls:
                     if not self._has_memory_headroom():
                         remaining = deadline - time()
@@ -186,6 +253,8 @@ class Manager:
                                 "Timed out waiting for host memory headroom"
                             ) from None
                         continue
+                    self._starting += 1
+                    needs_capacity_reservation = True
                     break
 
                 if self._free:
@@ -194,6 +263,8 @@ class Manager:
                     )  # Use the one that's been around the longest
                     self._free.remove(oldest)
                     repl_to_destroy = oldest
+                    transferred_reservation = self._capacity_reservations.pop(oldest, None)
+                    self._starting += 1
                     break
 
                 remaining = deadline - time()
@@ -214,7 +285,39 @@ class Manager:
         if repl_to_destroy is not None:
             asyncio.create_task(close_verbose(repl_to_destroy))
 
-        return await self.start_new(header)
+        reservation = transferred_reservation
+        if needs_capacity_reservation:
+            remaining = deadline - time()
+            if remaining <= 0:
+                await self._finish_failed_start()
+                raise NoAvailableReplError(f"Timed out after {timeout}s")
+            try:
+                reservation = await (
+                    self.capacity_pool or ReplCapacityPool(None)
+                ).acquire(timeout=remaining)
+            except Exception:
+                await self._finish_failed_start()
+                raise
+
+        try:
+            return await self.start_new(header, reservation=reservation)
+        except Exception:
+            if reservation is not None:
+                await reservation.release()
+            raise
+
+    async def _finish_failed_start(self) -> None:
+        self._ensure_lock()
+        assert self._cond is not None
+        async with self._cond:
+            self._starting = max(self._starting - 1, 0)
+            self._cond.notify(1)
+
+    async def _close_repl(self, repl: Repl, *, release_capacity: bool = True) -> None:
+        reservation = self._capacity_reservations.pop(repl, None)
+        asyncio.create_task(close_verbose(repl))
+        if release_capacity and reservation is not None:
+            await reservation.release()
 
     async def destroy_repl(self, repl: Repl) -> None:
         self._ensure_lock()
@@ -223,7 +326,7 @@ class Manager:
             self._busy.discard(repl)
             if repl in self._free:
                 self._free.remove(repl)
-            asyncio.create_task(close_verbose(repl))
+            await self._close_repl(repl)
             self._cond.notify(1)
 
     async def release_repl(self, repl: Repl) -> None:
@@ -241,7 +344,7 @@ class Manager:
                 logger.debug(f"REPL {uuid.hex[:8]} is exhausted, closing it")
                 self._busy.discard(repl)
 
-                asyncio.create_task(close_verbose(repl))
+                await self._close_repl(repl)
                 self._cond.notify(1)
                 return
             self._busy.remove(repl)
@@ -250,15 +353,32 @@ class Manager:
             logger.debug(f"\\[{repl.uuid.hex[:8]}] Released!")
             self._cond.notify(1)
 
-    async def start_new(self, header: str) -> Repl:
-        repl = await Repl.create(
-            header,
-            max_repl_uses=self.max_repl_uses,
-            max_repl_mem=self.max_repl_mem,
-            repl_path=self.repl_path,
-            project_dir=self.project_dir,
-        )
-        self._busy.add(repl)
+    async def start_new(
+        self,
+        header: str,
+        *,
+        reservation: ReplCapacityReservation | None = None,
+    ) -> Repl:
+        try:
+            repl = await Repl.create(
+                header,
+                max_repl_uses=self.max_repl_uses,
+                max_repl_mem=self.max_repl_mem,
+                repl_path=self.repl_path,
+                project_dir=self.project_dir,
+            )
+        except Exception:
+            await self._finish_failed_start()
+            raise
+
+        self._ensure_lock()
+        assert self._cond is not None
+        async with self._cond:
+            self._starting = max(self._starting - 1, 0)
+            self._busy.add(repl)
+            if reservation is not None:
+                self._capacity_reservations[repl] = reservation
+            self._cond.notify(1)
         return repl
 
     async def cleanup(self) -> None:
@@ -267,11 +387,11 @@ class Manager:
         async with self._cond:
             logger.info("Cleaning up REPL manager...")
             for repl in self._free:
-                asyncio.create_task(close_verbose(repl))
+                await self._close_repl(repl)
             self._free.clear()
 
             for repl in self._busy:
-                asyncio.create_task(close_verbose(repl))
+                await self._close_repl(repl)
             self._busy.clear()
 
             logger.info("REPL manager cleaned up!")

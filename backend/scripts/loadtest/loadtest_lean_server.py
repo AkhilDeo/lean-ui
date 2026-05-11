@@ -663,6 +663,7 @@ async def eval_sync_batch(
     retries: int,
     retry_backoff_base: float,
     retry_backoff_max: float,
+    runtime_id: str | None,
 ) -> list[EvalRow]:
     payload = {
         "snippets": [{"id": case.case_id, "code": case.code} for case in cases],
@@ -670,6 +671,8 @@ async def eval_sync_batch(
         "debug": False,
         "reuse": True,
     }
+    if runtime_id:
+        payload["runtime_id"] = runtime_id
     url = f"{base_url}/api/check"
     started = time.perf_counter()
     last_status = -1
@@ -726,6 +729,7 @@ async def eval_async_batch(
     poll_timeout_s: float,
     poll_wait_sec: float,
     progress_tracker: AsyncProgressTracker | None = None,
+    runtime_id: str | None = None,
 ) -> list[EvalRow]:
     submit_payload = {
         "snippets": [{"id": case.case_id, "code": case.code} for case in cases],
@@ -733,6 +737,8 @@ async def eval_async_batch(
         "debug": False,
         "reuse": True,
     }
+    if runtime_id:
+        submit_payload["runtime_id"] = runtime_id
     submit_url = f"{base_url}/api/async/check"
     started = time.perf_counter()
 
@@ -1219,6 +1225,7 @@ async def run_tier(
                             retries=args.retries,
                             retry_backoff_base=args.retry_backoff_base,
                             retry_backoff_max=args.retry_backoff_max,
+                            runtime_id=args.runtime_id or None,
                         )
                     return await eval_async_batch(
                         cases=batch,
@@ -1233,6 +1240,7 @@ async def run_tier(
                         poll_timeout_s=args.poll_timeout_s,
                         poll_wait_sec=args.async_poll_wait_sec,
                         progress_tracker=progress_tracker,
+                        runtime_id=args.runtime_id or None,
                     )
 
             batch_rows = await asyncio.gather(*(run_one(batch) for batch in case_batches))
@@ -1357,6 +1365,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
 
     parser.add_argument("--api-key", default="")
+    parser.add_argument("--runtime-id", default="")
     parser.add_argument("--waves", type=int, default=1)
     parser.add_argument("--min-total-cases", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=1)

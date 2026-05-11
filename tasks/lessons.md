@@ -11,6 +11,11 @@ Capture a new entry after every user correction.
 
 ## Entries
 - Add newest entries at the top.
+- Date: 2026-05-11
+- Correction received: Add `/goal` to the Codex configuration, not as a route or feature inside the `lean-ui` app.
+- Root cause: I treated the slash-command wording as an application route request because the working directory was the `lean-ui` repo, then initially added a personal prompt workaround instead of checking whether Codex already had an official gated feature.
+- New preventive rule: When the user requests a slash-prefixed Codex command like `/goal`, first check `codex features list` and official Codex config behavior before adding custom prompt files.
+- Where applied: `~/.codex/config.toml` with `[features].goals = true`, removal of the temporary `~/.codex/prompts/goal.md` workaround, and this correction log entry.
 - Date: 2026-04-17
 - Correction received: Keep strict Lean `v4.9.0` semantics (no auto-fallback), restore hot-start reuse for real warm contexts, and include production rollout + timing validation in the same implementation pass.
 - Root cause: I had accepted partial mitigations (cold/warm messaging and fallback behavior) without fully fixing the `v4.9.0` command-stream path, readiness truthfulness, and observability needed to prove where latency was actually coming from.

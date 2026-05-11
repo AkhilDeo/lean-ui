@@ -114,6 +114,7 @@ Or from source with `pip install -e .`
 | `LEAN_SERVER_ENVIRONMENT`             | `dev`         | Environment `dev` or `prod`                            |
 | `LEAN_SERVER_LEAN_VERSION`            | `v4.9.0`      | Lean version                                           |
 | `LEAN_SERVER_MAX_REPLS`               | CPU count - 1 | Maximum number of REPLs                                |
+| `LEAN_SERVER_MAX_TOTAL_REPLS`         | unset         | Optional process-wide REPL cap across runtime managers |
 | `LEAN_SERVER_MAX_REPL_USES`           | `-1`          | Maximum number of uses per REPL (-1 is no limit)       |
 | `LEAN_SERVER_MAX_REPL_MEM`            | `8G`          | Maximum memory limit for each REPL (Linux-only)        |
 | `LEAN_SERVER_MAX_WAIT`                | `60`          | Maximum wait time to wait for a REPL (in seconds)      |

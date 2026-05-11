@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from server.runtime_registry import (
@@ -109,3 +111,32 @@ def test_multi_runtime_manager_rejects_missing_runtime_artifacts(tmp_path) -> No
 
     with pytest.raises(Exception, match="not installed"):
         managers.get("v4.28.0")
+
+
+def test_multi_runtime_manager_creation_is_single_flight(tmp_path, monkeypatch) -> None:
+    settings = Settings(_env_file=None)
+    settings.multi_runtime_enabled = True
+    settings.runtime_root = tmp_path
+    registry = build_runtime_registry("v4.9.0")
+
+    root = tmp_path / runtime_slug("v4.28.0")
+    repl_path = root / "repl/.lake/build/bin"
+    repl_path.mkdir(parents=True)
+    (repl_path / "repl").touch()
+    (root / "mathlib4").mkdir()
+
+    created: list[object] = []
+
+    class FakeManager:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+            created.append(self)
+
+    monkeypatch.setattr("server.runtime_managers.Manager", FakeManager)
+    managers = RuntimeManagerRegistry(settings, registry)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: managers.get("v4.28.0"), range(16)))
+
+    assert len(created) == 1
+    assert all(result is created[0] for result in results)

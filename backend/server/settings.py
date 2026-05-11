@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     runtime_root: Path = Path("/runtimes")
 
     max_repls: int = max((os.cpu_count() or 1) - 1, 1)
+    max_total_repls: int | None = None
     max_repl_uses: int = -1
     max_repl_mem: int = 8
     max_wait: int = 300
@@ -123,6 +124,18 @@ class Settings(BaseSettings):
         if isinstance(v, str) and v.strip() == "":
             return os.cpu_count() or 1
         return cast(int, v)
+
+    @field_validator("max_total_repls", mode="before")
+    @classmethod
+    def _parse_max_total_repls(cls, v: int | str | None) -> int | None:
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        parsed = int(v)
+        if parsed < 1:
+            raise ValueError("max_total_repls must be >= 1 when provided")
+        return parsed
 
     @field_validator("min_host_free_mem", mode="before")
     @classmethod
