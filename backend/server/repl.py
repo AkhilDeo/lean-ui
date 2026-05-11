@@ -35,6 +35,10 @@ log_lock = asyncio.Lock()
 
 @lru_cache(maxsize=4)
 def _resolve_lean_path(project_dir: str) -> str:
+    build_lib = Path(project_dir) / ".lake/build/lib/lean"
+    if build_lib.is_dir():
+        return str(build_lib)
+
     proc = subprocess.run(
         ["lake", "env", "printenv", "LEAN_PATH"],
         cwd=project_dir,

@@ -10,7 +10,7 @@ import pytest
 
 from server.errors import NoAvailableReplError
 from server.manager import Manager, ReplCapacityPool
-from server.repl import Repl
+from server.repl import Repl, _resolve_lean_path
 
 
 @pytest.mark.asyncio
@@ -22,6 +22,15 @@ async def test_memory_guard_rejects_when_no_busy_repls(
 
     with pytest.raises(NoAvailableReplError, match="Insufficient host memory"):
         await manager.get_repl(timeout=1)
+
+
+def test_resolve_lean_path_uses_build_lib_fast_path(tmp_path) -> None:
+    project_dir = tmp_path / "mathlib4"
+    build_lib = project_dir / ".lake/build/lib/lean"
+    build_lib.mkdir(parents=True)
+
+    _resolve_lean_path.cache_clear()
+    assert _resolve_lean_path(str(project_dir)) == str(build_lib)
 
 
 @pytest.mark.asyncio
