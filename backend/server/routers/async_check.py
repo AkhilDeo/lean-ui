@@ -61,6 +61,10 @@ async def submit_async_check(
     normalized_payload = normalize_check_request(payload, runtime_settings)
     runtime_id = normalized_payload.runtime_id or runtime_settings.default_runtime_id
     ensure_runtime_request_allowed(runtime_settings, runtime_id)
+    if runtime_settings.multi_runtime_enabled:
+        registry = getattr(request.app.state, "runtime_registry", None)
+        if registry is None or registry.get(runtime_id) is None:
+            raise HTTPException(status_code=400, detail=f"Unknown runtime_id: {runtime_id}")
     if runtime_gateway is not None:
         runtime = runtime_gateway.require_runtime(runtime_id)
         is_warm = await runtime_gateway.is_runtime_warm(

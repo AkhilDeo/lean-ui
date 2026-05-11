@@ -14,6 +14,7 @@ from .async_tiering import AsyncQueueTier, warm_repl_targets_for_tier
 from .logger import setup_logging
 from .manager import Manager
 from .routers.check import run_checks
+from .runtime_managers import RuntimeManagerRegistry
 from .settings import Settings
 
 
@@ -137,13 +138,14 @@ async def _maybe_pause_for_circuit_breaker(
 
 async def process_task(
     jobs: AsyncJobs,
-    manager: Manager,
+    manager: Manager | None,
     task_timeout_sec: int,
     worker_retries: int = 3,
     consumer_id: int = 0,
     policy: AsyncWorkerPolicy | None = None,
     circuit_breaker: AsyncCircuitBreaker | None = None,
     runtime_id: str | None = None,
+    runtime_managers: RuntimeManagerRegistry | None = None,
 ) -> bool:
     effective_policy = policy or AsyncWorkerPolicy.from_settings(Settings())
     task = await jobs.dequeue_task(
@@ -153,6 +155,14 @@ async def process_task(
     )
     if task is None:
         return False
+    task_manager = await runtime_managers.get_async(task.runtime_id) if runtime_managers else manager
+    if task_manager is None:
+        await jobs.mark_task_failure(
+            task,
+            "worker_error: REPL manager is not configured",
+            task.snippet.id,
+        )
+        return True
 
     queue_tier = AsyncQueueTier(task.queue_tier)
     attempts = (
@@ -190,7 +200,7 @@ async def process_task(
                     [task.snippet],
                     timeout=task.timeout,
                     debug=task.debug,
-                    manager=manager,
+                    manager=task_manager,
                     reuse=task.reuse,
                     infotree=task.infotree,
                 )
@@ -416,13 +426,14 @@ async def _consumer_loop(
     *,
     consumer_id: int,
     jobs: AsyncJobs,
-    manager: Manager,
+    manager: Manager | None,
     task_timeout_sec: int,
     worker_retries: int,
     policy: AsyncWorkerPolicy,
     circuit_breaker: AsyncCircuitBreaker | None,
     warm_targets: dict[str, int],
     runtime_id: str,
+    runtime_managers: RuntimeManagerRegistry | None = None,
 ) -> None:
     queue_tier = (
         policy.worker_queue_tier
@@ -431,14 +442,15 @@ async def _consumer_loop(
     )
     while True:
         try:
-            await _maybe_pause_for_circuit_breaker(
-                breaker=circuit_breaker,
-                jobs=jobs,
-                manager=manager,
-                queue_tier=queue_tier,
-                warm_targets=warm_targets,
-                runtime_id=runtime_id,
-            )
+            if manager is not None:
+                await _maybe_pause_for_circuit_breaker(
+                    breaker=circuit_breaker,
+                    jobs=jobs,
+                    manager=manager,
+                    queue_tier=queue_tier,
+                    warm_targets=warm_targets,
+                    runtime_id=runtime_id,
+                )
             did_work = await process_task(
                 jobs=jobs,
                 manager=manager,
@@ -448,10 +460,12 @@ async def _consumer_loop(
                 policy=policy,
                 circuit_breaker=circuit_breaker,
                 runtime_id=runtime_id,
+                runtime_managers=runtime_managers,
             )
-            await _record_manager_metrics(
-                jobs, manager, queue_tier, warm_targets, runtime_id
-            )
+            if manager is not None:
+                await _record_manager_metrics(
+                    jobs, manager, queue_tier, warm_targets, runtime_id
+                )
             if not did_work:
                 await asyncio.sleep(0.05)
         except asyncio.CancelledError:
@@ -471,6 +485,7 @@ async def run_worker(
     *,
     jobs: AsyncJobs | None = None,
     manager: Manager | None = None,
+    runtime_managers: RuntimeManagerRegistry | None = None,
     manage_resources: bool = True,
 ) -> None:
     cfg = settings or Settings()
@@ -482,15 +497,16 @@ async def run_worker(
     recovered_tasks = await jobs.recover_running_tasks()
     if recovered_tasks:
         logger.warning("Recovered async tasks before worker start: {}", recovered_tasks)
-    owned_manager = manager is None
-    manager = manager or Manager(
-        max_repls=cfg.max_repls,
-        max_repl_uses=cfg.max_repl_uses,
-        max_repl_mem=cfg.max_repl_mem,
-        init_repls=cfg.init_repls,
-        min_host_free_mem=cfg.min_host_free_mem,
-        startup_concurrency_limit=cfg.async_startup_concurrency_limit,
-    )
+    owned_manager = manager is None and runtime_managers is None
+    if manager is None and runtime_managers is None:
+        manager = Manager(
+            max_repls=cfg.max_repls,
+            max_repl_uses=cfg.max_repl_uses,
+            max_repl_mem=cfg.max_repl_mem,
+            init_repls=cfg.init_repls,
+            min_host_free_mem=cfg.min_host_free_mem,
+            startup_concurrency_limit=cfg.async_startup_concurrency_limit,
+        )
     configured_concurrency = cfg.async_worker_concurrency or cfg.max_repls
     worker_concurrency = max(1, min(configured_concurrency, cfg.max_repls))
     policy = AsyncWorkerPolicy.from_settings(cfg)
@@ -513,16 +529,18 @@ async def run_worker(
         cfg.async_light_retry_attempts,
         cfg.async_heavy_retry_attempts,
     )
-    warm_task = asyncio.create_task(
-        _warm_pool_loop(
-            jobs=jobs,
-            manager=manager,
-            policy=policy,
-            warm_targets=warm_targets,
-            runtime_id=cfg.runtime_id,
-        ),
-        name="async-worker-warm-pool",
-    )
+    warm_task = None
+    if manager is not None:
+        warm_task = asyncio.create_task(
+            _warm_pool_loop(
+                jobs=jobs,
+                manager=manager,
+                policy=policy,
+                warm_targets=warm_targets,
+                runtime_id=cfg.runtime_id,
+            ),
+            name="async-worker-warm-pool",
+        )
     consumers = [
         asyncio.create_task(
             _consumer_loop(
@@ -534,7 +552,8 @@ async def run_worker(
                 policy=policy,
                 circuit_breaker=circuit_breaker,
                 warm_targets=warm_targets,
-                runtime_id=cfg.runtime_id,
+                runtime_id=None if runtime_managers is not None else cfg.runtime_id,
+                runtime_managers=runtime_managers,
             ),
             name=f"async-worker-consumer-{i + 1}",
         )
@@ -546,12 +565,14 @@ async def run_worker(
         logger.info("Worker cancelled")
         raise
     finally:
-        warm_task.cancel()
-        await asyncio.gather(warm_task, return_exceptions=True)
+        if warm_task is not None:
+            warm_task.cancel()
+            await asyncio.gather(warm_task, return_exceptions=True)
         for task in consumers:
             task.cancel()
         await asyncio.gather(*consumers, return_exceptions=True)
         if manage_resources and owned_manager:
+            assert manager is not None
             await manager.cleanup()
         if manage_resources and owned_jobs:
             await jobs.close()

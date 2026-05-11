@@ -168,6 +168,7 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
         circuit_breaker,
         warm_targets,
         runtime_id,
+        runtime_managers,
     ) -> None:
         _ = (
             jobs,
@@ -178,6 +179,7 @@ async def test_run_worker_starts_multiple_consumers(monkeypatch: pytest.MonkeyPa
             circuit_breaker,
             warm_targets,
             runtime_id,
+            runtime_managers,
         )
         started.add(consumer_id)
         try:
@@ -267,6 +269,46 @@ async def test_run_worker_uses_configured_concurrency(
         await task
 
     assert max_inflight >= 3
+
+
+@pytest.mark.asyncio
+async def test_run_worker_scans_all_runtime_queues_with_runtime_managers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_runtime_ids: list[str | None] = []
+    called = asyncio.Event()
+
+    async def fake_process_task(*args, **kwargs):  # type: ignore[no-untyped-def]
+        _ = args
+        seen_runtime_ids.append(kwargs["runtime_id"])
+        called.set()
+        await asyncio.sleep(0.01)
+        return False
+
+    monkeypatch.setattr("server.worker.process_task", fake_process_task)
+
+    cfg = Settings(_env_file=None)
+    cfg.async_enabled = True
+    cfg.max_repls = 1
+    cfg.async_worker_concurrency = 1
+    cfg.async_worker_queue_tier = AsyncQueueTier.all.value
+    cfg.multi_runtime_enabled = True
+    jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10, settings=cfg)
+
+    task = asyncio.create_task(
+        run_worker(
+            cfg,
+            jobs=jobs,
+            runtime_managers=object(),  # type: ignore[arg-type]
+            manage_resources=False,
+        )
+    )
+    await asyncio.wait_for(called.wait(), timeout=1.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert seen_runtime_ids == [None]
 
 
 @pytest.mark.asyncio

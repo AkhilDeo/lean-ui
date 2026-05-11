@@ -26,6 +26,10 @@ MATHLIB_REPO_URL="${MATHLIB_REPO_URL:-$(dotenv_get MATHLIB_REPO_URL)}"
 MATHLIB_REPO_URL="${MATHLIB_REPO_URL:-https://github.com/leanprover-community/mathlib4.git}"
 MATHLIB_BRANCH="${MATHLIB_BRANCH:-$(dotenv_get MATHLIB_BRANCH)}"
 MATHLIB_BRANCH="${MATHLIB_BRANCH:-$LEAN_SERVER_LEAN_VERSION}"
+LEAN_SERVER_RUNTIME_IDS="${LEAN_SERVER_RUNTIME_IDS:-$(dotenv_get LEAN_SERVER_RUNTIME_IDS)}"
+LEAN_SERVER_RUNTIME_IDS="${LEAN_SERVER_RUNTIME_IDS:-}"
+LEAN_SERVER_RUNTIME_ROOT="${LEAN_SERVER_RUNTIME_ROOT:-$(dotenv_get LEAN_SERVER_RUNTIME_ROOT)}"
+LEAN_SERVER_RUNTIME_ROOT="${LEAN_SERVER_RUNTIME_ROOT:-/runtimes}"
 
 command -v curl >/dev/null 2>&1 || { echo >&2 "curl is required"; exit 1; }
 command -v git  >/dev/null 2>&1 || { echo >&2 "git is required";  exit 1; }
@@ -95,13 +99,28 @@ path.write_text(text)
 PY
 }
 
-install_repo() {
-  local name="$1" url="$2" branch="$3" upd_manifest="$4"
-  echo "Installing ${name}@${branch}..."
-  if [ ! -d "$name" ]; then
-    git clone --branch "${branch}" --single-branch --depth 1 "$url" "$name"
+runtime_slug() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr '.-' '__'
+}
+
+runtime_ids_array() {
+  if [ -z "$LEAN_SERVER_RUNTIME_IDS" ]; then
+    printf '%s\n' "$LEAN_SERVER_LEAN_VERSION"
+    return
   fi
-  pushd "$name"
+  printf '%s\n' "$LEAN_SERVER_RUNTIME_IDS" \
+    | tr -d '[]" ' \
+    | tr ',' '\n' \
+    | sed '/^$/d'
+}
+
+install_repo() {
+  local name="$1" url="$2" branch="$3" upd_manifest="$4" target_dir="$5"
+  echo "Installing ${name}@${branch}..."
+  if [ ! -d "$target_dir" ]; then
+    git clone --branch "${branch}" --single-branch --depth 1 "$url" "$target_dir"
+  fi
+  pushd "$target_dir"
     git remote set-url origin "$url"
     if ! git rev-parse --verify --quiet "${branch}^{commit}" >/dev/null; then
       git fetch --depth 1 origin "refs/tags/${branch}:refs/tags/${branch}" \
@@ -127,6 +146,30 @@ install_repo() {
   popd
 }
 
-install_repo repl "$REPL_REPO_URL" "$REPL_BRANCH" false
+install_runtime() {
+  local runtime_id="$1"
+  local root="${LEAN_SERVER_RUNTIME_ROOT}/$(runtime_slug "$runtime_id")"
+  mkdir -p "$root"
+  elan default "$runtime_id"
+  install_repo repl "$REPL_REPO_URL" "$runtime_id" false "${root}/repl"
+  install_repo mathlib4 "$MATHLIB_REPO_URL" "$runtime_id" true "${root}/mathlib4"
+}
 
-install_repo mathlib4 "$MATHLIB_REPO_URL" "$MATHLIB_BRANCH" true
+if [ -n "$LEAN_SERVER_RUNTIME_IDS" ]; then
+  while IFS= read -r runtime_id; do
+    install_runtime "$runtime_id"
+  done < <(runtime_ids_array)
+
+  while IFS= read -r runtime_id; do
+    root="${LEAN_SERVER_RUNTIME_ROOT}/$(runtime_slug "$runtime_id")"
+    test -x "${root}/repl/.lake/build/bin/repl"
+    test -d "${root}/mathlib4"
+  done < <(runtime_ids_array)
+
+  default_root="${LEAN_SERVER_RUNTIME_ROOT}/$(runtime_slug "$LEAN_SERVER_LEAN_VERSION")"
+  ln -sfn "${default_root}/repl" /repl
+  ln -sfn "${default_root}/mathlib4" /mathlib4
+else
+  install_repo repl "$REPL_REPO_URL" "$REPL_BRANCH" false repl
+  install_repo mathlib4 "$MATHLIB_REPO_URL" "$MATHLIB_BRANCH" true mathlib4
+fi

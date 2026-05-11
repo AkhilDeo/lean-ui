@@ -15,6 +15,7 @@ from ..prisma_client import prisma
 from ..request_policy import normalize_check_request
 from ..repl import Repl
 from ..runtime_gateway import RuntimeGateway
+from ..runtime_managers import RuntimeManagerRegistry
 from ..settings import Settings, settings as default_settings
 from ..split import split_snippet
 from ..utils import is_blank
@@ -32,6 +33,13 @@ def get_optional_manager(request: Request) -> Manager | None:
     return cast(Manager | None, getattr(request.app.state, "manager", None))
 
 
+def get_runtime_managers(request: Request) -> RuntimeManagerRegistry | None:
+    return cast(
+        RuntimeManagerRegistry | None,
+        getattr(request.app.state, "runtime_managers", None),
+    )
+
+
 def get_runtime_settings(request: Request) -> Settings:
     cfg = getattr(request.app.state, "settings", None)
     if cfg is None:
@@ -45,6 +53,8 @@ def get_runtime_gateway(request: Request) -> RuntimeGateway | None:
 
 def ensure_runtime_request_allowed(runtime_settings: Settings, runtime_id: str) -> None:
     if runtime_settings.gateway_enabled:
+        return
+    if runtime_settings.multi_runtime_enabled:
         return
     if runtime_id != runtime_settings.runtime_id:
         raise HTTPException(
@@ -295,6 +305,12 @@ async def check(
                 f"Runtime {runtime.runtime_id} is cold and is starting up. "
                 "Retry asynchronously via /api/async/check."
             ),
+        )
+
+    runtime_managers = get_runtime_managers(raw_request)
+    if runtime_managers is not None:
+        manager = await runtime_managers.get_async(
+            normalized_request.runtime_id or runtime_settings.default_runtime_id
         )
 
     if manager is None:

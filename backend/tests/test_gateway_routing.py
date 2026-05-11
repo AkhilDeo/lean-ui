@@ -12,6 +12,7 @@ from kimina_client.models import CheckResponse, ReplResponse
 from server.manager import WarmPoolStatus, WarmTargetStatus
 from server.main import create_app
 from server.runtime_registry import runtime_env_key, seeded_runtime_ids
+from server.runtime_managers import runtime_slug
 from server.settings import Environment, Settings
 
 
@@ -305,6 +306,21 @@ def _runtime_async_app() -> Settings:
     return settings
 
 
+def _multi_runtime_app(tmp_path) -> Settings:  # type: ignore[no-untyped-def]
+    settings = _runtime_async_app()
+    settings.multi_runtime_enabled = True
+    settings.default_runtime_id = "v4.9.0"
+    settings.runtime_id = "v4.9.0"
+    settings.runtime_root = tmp_path
+    for runtime_id in seeded_runtime_ids():
+        root = tmp_path / runtime_slug(runtime_id)
+        repl_path = root / "repl/.lake/build/bin"
+        repl_path.mkdir(parents=True)
+        (repl_path / "repl").touch()
+        (root / "mathlib4").mkdir()
+    return settings
+
+
 def test_runtime_runtimes_endpoint_exposes_only_service_runtime() -> None:
     app = create_app(_runtime_app())
 
@@ -329,6 +345,53 @@ def test_runtime_runtimes_endpoint_exposes_only_service_runtime() -> None:
                 }
             ],
         }
+
+
+def test_multi_runtime_runtimes_endpoint_exposes_seeded_registry(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    async def fake_ensure_warm_repls(self, targets, *, timeout=60.0):  # type: ignore[no-untyped-def]
+        _ = self, targets, timeout
+        return WarmPoolStatus(success=True, reason=None, targets=[])
+
+    monkeypatch.setattr("server.manager.Manager.ensure_warm_repls", fake_ensure_warm_repls)
+    app = create_app(_multi_runtime_app(tmp_path))
+
+    with TestClient(app, base_url="http://testserver") as client:
+        response = client.get("/api/runtimes")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["default_runtime_id"] == "v4.9.0"
+        assert [runtime["runtime_id"] for runtime in body["runtimes"]] == list(
+            seeded_runtime_ids()
+        )
+
+
+def test_multi_runtime_sync_check_accepts_non_default_runtime(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    calls: list[str] = []
+
+    async def fake_ensure_warm_repls(self, targets, *, timeout=60.0):  # type: ignore[no-untyped-def]
+        _ = self, targets, timeout
+        return WarmPoolStatus(success=True, reason=None, targets=[])
+
+    async def fake_run_checks(snippets, timeout, debug, manager, reuse, infotree=None):  # type: ignore[no-untyped-def]
+        _ = snippets, timeout, debug, reuse, infotree
+        calls.append(str(manager.project_dir))
+        return [ReplResponse(id="verification", time=0.1, response={"env": 0})]
+
+    monkeypatch.setattr("server.manager.Manager.ensure_warm_repls", fake_ensure_warm_repls)
+    monkeypatch.setattr("server.routers.check.run_checks", fake_run_checks)
+    app = create_app(_multi_runtime_app(tmp_path))
+
+    with TestClient(app, base_url="http://testserver") as client:
+        client.headers.update({"Authorization": "Bearer test-key"})
+        response = client.post(
+            "/api/check",
+            json={
+                "snippets": [{"id": "verification", "code": "#check Nat"}],
+                "runtime_id": "v4.28.0",
+            },
+        )
+        assert response.status_code == 200
+        assert calls == [str(tmp_path / runtime_slug("v4.28.0") / "mathlib4")]
 
 
 def test_runtime_sync_check_rejects_mismatched_runtime_id() -> None:

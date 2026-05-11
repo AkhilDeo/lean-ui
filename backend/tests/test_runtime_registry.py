@@ -7,6 +7,8 @@ from server.runtime_registry import (
     seeded_runtime_ids,
     validate_runtime_configuration,
 )
+from server.runtime_managers import runtime_slug
+from server.runtime_managers import RuntimeManagerRegistry
 from server.settings import Settings
 
 
@@ -78,3 +80,32 @@ def test_embedded_runtime_validation_rejects_version_mismatch() -> None:
     registry = build_runtime_registry("v4.15.0", env=env)
     with pytest.raises(RuntimeConfigurationError, match="LEAN_SERVER_LEAN_VERSION"):
         validate_runtime_configuration(settings, registry)
+
+
+def test_multi_runtime_validation_accepts_local_runtime_artifacts(tmp_path) -> None:
+    settings = Settings(_env_file=None)
+    settings.multi_runtime_enabled = True
+    settings.embedded_worker_enabled = True
+    settings.async_enabled = True
+    settings.runtime_root = tmp_path
+    settings.init_repls = {}
+
+    for runtime_id in seeded_runtime_ids():
+        root = tmp_path / runtime_slug(runtime_id)
+        repl_path = root / "repl/.lake/build/bin"
+        repl_path.mkdir(parents=True)
+        (repl_path / "repl").touch()
+        (root / "mathlib4").mkdir()
+
+    validate_runtime_configuration(settings)
+
+
+def test_multi_runtime_manager_rejects_missing_runtime_artifacts(tmp_path) -> None:
+    settings = Settings(_env_file=None)
+    settings.multi_runtime_enabled = True
+    settings.runtime_root = tmp_path
+    registry = build_runtime_registry("v4.9.0")
+    managers = RuntimeManagerRegistry(settings, registry)
+
+    with pytest.raises(Exception, match="not installed"):
+        managers.get("v4.28.0")

@@ -12,11 +12,12 @@ def test_missing_keys_utility() -> None:
     assert missing_keys(required, env) == ["B"]
 
 
-def test_gateway_role_requires_seeded_runtime_service_ids_and_base_urls() -> None:
-    required = required_keys_for_role("gateway")
-    assert "LEAN_SERVER_RAILWAY_ENVIRONMENT_ID" in required
-    assert "LEAN_SERVER_RUNTIME_V4_15_0_SERVICE_ID" in required
-    assert "LEAN_SERVER_RUNTIME_V4_15_0_BASE_URL" in required
+def test_single_service_role_requires_multi_runtime_wiring() -> None:
+    required = required_keys_for_role("single-service")
+    assert "LEAN_SERVER_MULTI_RUNTIME_ENABLED" in required
+    assert "LEAN_SERVER_RUNTIME_IDS" in required
+    assert "LEAN_SERVER_RUNTIME_ROOT" in required
+    assert "LEAN_SERVER_EMBEDDED_WORKER_ENABLED" in required
 
 
 def test_runtime_role_requires_single_runtime_service_wiring() -> None:
@@ -46,17 +47,20 @@ def test_assert_limits_and_replicas_helpers() -> None:
     assert_replicas(state, expected=1)
 
 
-def test_dockerfile_exports_single_runtime_build_args() -> None:
+def test_dockerfile_exports_multi_runtime_build_args() -> None:
     dockerfile = (
         Path(__file__).resolve().parents[1] / "Dockerfile"
     ).read_text(encoding="utf-8")
     assert "REPL_REPO_URL=${REPL_REPO_URL}" in dockerfile
     assert "REPL_BRANCH=${REPL_BRANCH}" in dockerfile
+    assert "LEAN_SERVER_RUNTIME_IDS=${LEAN_SERVER_RUNTIME_IDS}" in dockerfile
+    assert "LEAN_SERVER_MULTI_RUNTIME_ENABLED=true" in dockerfile
 
 
-def test_setup_defaults_single_mathlib_runtime() -> None:
+def test_setup_supports_multi_runtime_install() -> None:
     setup_script = (
         Path(__file__).resolve().parents[1] / "setup.sh"
     ).read_text(encoding="utf-8")
     assert "https://github.com/leanprover-community/repl.git" in setup_script
     assert 'REPL_BRANCH="${REPL_BRANCH:-$LEAN_SERVER_LEAN_VERSION}"' in setup_script
+    assert "install_runtime()" in setup_script

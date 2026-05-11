@@ -55,3 +55,37 @@ def test_in_memory_async_jobs_scope_runtime_ids_by_service_role() -> None:
     runtime_settings.runtime_id = "v4.27.0"
     runtime_jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10, settings=runtime_settings)
     assert runtime_jobs.runtime_ids == ["v4.27.0"]
+
+    multi_runtime_settings = Settings(_env_file=None)
+    multi_runtime_settings.multi_runtime_enabled = True
+    multi_runtime_jobs = InMemoryAsyncJobs(
+        ttl_sec=3600, backlog_limit=10, settings=multi_runtime_settings
+    )
+    assert multi_runtime_jobs.runtime_ids == [
+        "v4.9.0",
+        "v4.15.0",
+        "v4.24.0",
+        "v4.27.0",
+        "v4.28.0",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_in_memory_multi_runtime_dequeue_scans_all_runtime_queues() -> None:
+    settings = Settings(_env_file=None)
+    settings.multi_runtime_enabled = True
+    jobs = InMemoryAsyncJobs(ttl_sec=3600, backlog_limit=10, settings=settings)
+
+    await jobs.submit(
+        CheckRequest(
+            snippets=[Snippet(id="other", code="import Mathlib\n#check Nat")],
+            timeout=30,
+            runtime_id="v4.28.0",
+        )
+    )
+
+    task = await jobs.dequeue_task(timeout_sec=1)
+
+    assert task is not None
+    assert task.runtime_id == "v4.28.0"
+    assert task.snippet.id == "other"

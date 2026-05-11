@@ -15,7 +15,7 @@ BACKEND_DIR = SCRIPT_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from server.runtime_registry import runtime_env_key, seeded_runtime_ids
+from server.runtime_registry import seeded_runtime_ids
 
 PROJECT_ID = "0aa8564f-7dab-476a-94d9-0de8fb381c9f"
 ENVIRONMENT_ID = "9ac4affd-7f62-415d-9c34-d2748db92462"
@@ -335,12 +335,18 @@ def build_common_async_vars(
     }
 
 
-def configure_gateway_service(
+def delete_service(client: RailwayClient, *, service_id: str) -> None:
+    mutation = """
+    mutation($id:String!,$eid:String) {
+      serviceDelete(id:$id, environmentId:$eid)
+    }
+    """
+    client.gql(mutation, {"id": service_id, "eid": ENVIRONMENT_ID})
+
+
+def configure_single_service(
     client: RailwayClient,
     *,
-    runtime_service_urls: dict[str, str],
-    runtime_service_ids: dict[str, str],
-    redis_url: str,
     api_key: str,
     autoscale_token: str,
 ) -> None:
@@ -350,8 +356,11 @@ def configure_gateway_service(
         input_payload={
             "rootDirectory": "/backend",
             "railwayConfigFile": "/backend/railway.toml",
+            "dockerfilePath": "Dockerfile",
             "startCommand": "python -m server",
-            "sleepApplication": False,
+            "sleepApplication": True,
+            "healthcheckPath": "/health",
+            "healthcheckTimeout": 1800,
             "restartPolicyType": "ON_FAILURE",
             "restartPolicyMaxRetries": 3,
             "multiRegionConfig": {REGION: {"numReplicas": 1}},
@@ -359,6 +368,68 @@ def configure_gateway_service(
     )
     update_limits(client, service_id=GATEWAY_SERVICE_ID, vcpus=4, memory_gb=8)
 
+    service_vars = {
+        "LEAN_SERVER_ENVIRONMENT": "prod",
+        "LEAN_SERVER_API_KEY": api_key,
+        "LEAN_SERVER_GATEWAY_ENABLED": "false",
+        "LEAN_SERVER_MULTI_RUNTIME_ENABLED": "true",
+        "LEAN_SERVER_EMBEDDED_WORKER_ENABLED": "true",
+        "LEAN_SERVER_ASYNC_ENABLED": "true",
+        "LEAN_SERVER_ASYNC_USE_IN_MEMORY_BACKEND": "true",
+        "LEAN_SERVER_ASYNC_METRICS_ENABLED": "true",
+        "LEAN_SERVER_DEFAULT_RUNTIME_ID": DEFAULT_RUNTIME_ID,
+        "LEAN_SERVER_RUNTIME_ID": DEFAULT_RUNTIME_ID,
+        "LEAN_SERVER_LEAN_VERSION": DEFAULT_RUNTIME_ID,
+        "LEAN_SERVER_RUNTIME_IDS": ",".join(seeded_runtime_ids()),
+        "LEAN_SERVER_RUNTIME_ROOT": "/runtimes",
+        "LEAN_SERVER_MAX_REPLS": "1",
+        "LEAN_SERVER_MAX_REPL_MEM": "8G",
+        "LEAN_SERVER_MAX_WAIT": "300",
+        "LEAN_SERVER_INIT_REPLS": "{}",
+        "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY": "1",
+        "LEAN_SERVER_ASYNC_WORKER_QUEUE_TIER": "all",
+        "LEAN_SERVER_ASYNC_ADMISSION_QUEUE_LIMIT": "0",
+        "LEAN_SERVER_ASYNC_ALERT_MAX_OLDEST_QUEUED_AGE_SEC": "60",
+        "LEAN_SERVER_ASYNC_RESULT_TTL_SEC": "3600",
+        "LEAN_SERVER_ASYNC_QUEUE_NAME_LIGHT": "lean_async_light",
+        "LEAN_SERVER_ASYNC_QUEUE_NAME_HEAVY": "lean_async_heavy",
+        "LEAN_SERVER_ASYNC_BACKLOG_LIMIT": "100000",
+        "LEAN_SERVER_ASYNC_MAX_QUEUE_WAIT_SEC": "600",
+        "LEAN_SERVER_REQUEST_TIMEOUT_MAX_SEC": "300",
+        "LEAN_SERVER_MIN_HOST_FREE_MEM": "4G",
+        "LEAN_SERVER_DATABASE_URL": "",
+        "LEAN_SERVER_AUTOSCALE_RAILWAY_TOKEN": autoscale_token,
+        "LEAN_SERVER_ASYNC_LIGHT_RETRY_ATTEMPTS": "5",
+        "LEAN_SERVER_ASYNC_HEAVY_RETRY_ATTEMPTS": "7",
+        "LEAN_SERVER_ASYNC_LIGHT_WARM_REPLS": "{}",
+        "LEAN_SERVER_ASYNC_HEAVY_WARM_REPLS": "{}",
+    }
+    upsert_variables(client, service_id=GATEWAY_SERVICE_ID, variables=service_vars)
+
+
+def configure_gateway_service(
+    client: RailwayClient,
+    *,
+    runtime_service_urls: dict[str, str],
+    runtime_service_ids: dict[str, str],
+    redis_url: str,
+    api_key: str,
+    autoscale_token: str,
+) -> None:
+    configure_single_service(
+        client,
+        api_key=api_key,
+        autoscale_token=autoscale_token,
+    )
+    _ = runtime_service_urls, runtime_service_ids, redis_url
+
+
+def _legacy_gateway_vars(
+    *,
+    redis_url: str,
+    api_key: str,
+    autoscale_token: str,
+) -> dict[str, str]:
     gateway_vars = build_common_async_vars(
         redis_url=redis_url,
         api_key=api_key,
@@ -374,11 +445,7 @@ def configure_gateway_service(
             "LEAN_SERVER_GATEWAY_WAKE_REPLICAS": "1",
         }
     )
-    for runtime_id in seeded_runtime_ids():
-        gateway_vars[runtime_env_key(runtime_id, "SERVICE_ID")] = runtime_service_ids[runtime_id]
-        gateway_vars[runtime_env_key(runtime_id, "BASE_URL")] = runtime_service_urls[runtime_id]
-
-    upsert_variables(client, service_id=GATEWAY_SERVICE_ID, variables=gateway_vars)
+    return gateway_vars
 
 
 def configure_runtime_service(
@@ -397,8 +464,11 @@ def configure_runtime_service(
         input_payload={
             "rootDirectory": "/backend",
             "railwayConfigFile": "/backend/railway.toml",
+            "dockerfilePath": "Dockerfile",
             "startCommand": "python -m server",
             "sleepApplication": not is_default_runtime,
+            "healthcheckPath": "/health",
+            "healthcheckTimeout": 1800,
             "restartPolicyType": "ON_FAILURE",
             "restartPolicyMaxRetries": 3,
             "multiRegionConfig": {REGION: {"numReplicas": 1}},
@@ -447,64 +517,28 @@ def main() -> int:
     client = RailwayClient(token)
 
     services = get_services(client)
-    redis_id = create_redis_if_missing(client, services)
-
-    runtime_service_ids: dict[str, str] = {}
-    services = get_services(client)
-    for runtime_id in seeded_runtime_ids():
-        name = RUNTIME_SERVICE_NAMES[runtime_id]
-        runtime_service_ids[runtime_id] = create_service_if_missing(client, services, name)
-        services = get_services(client)
-
     gateway_vars = get_service_variables(client, service_id=GATEWAY_SERVICE_ID)
     api_key = gateway_vars.get("LEAN_SERVER_API_KEY")
     if not api_key:
         raise RuntimeError("Gateway service is missing LEAN_SERVER_API_KEY")
 
-    redis_vars = get_service_variables(client, service_id=redis_id)
-    redis_url = choose_redis_url(redis_vars)
-
-    for runtime_id in seeded_runtime_ids():
-        configure_runtime_service(
-            client,
-            runtime_id=runtime_id,
-            service_id=runtime_service_ids[runtime_id],
-            redis_url=redis_url,
-            api_key=api_key,
-            autoscale_token=token,
-        )
-
-    for runtime_id in seeded_runtime_ids():
-        redeploy(client, service_id=runtime_service_ids[runtime_id])
-
-    for runtime_id in seeded_runtime_ids():
-        wait_for_success(client, service_id=runtime_service_ids[runtime_id])
-
-    runtime_service_urls: dict[str, str] = {}
-    for runtime_id in seeded_runtime_ids():
-        runtime_service_urls[runtime_id] = get_private_base_url(
-            client, service_id=runtime_service_ids[runtime_id]
-        )
-
-    configure_gateway_service(
+    configure_single_service(
         client,
-        runtime_service_urls=runtime_service_urls,
-        runtime_service_ids=runtime_service_ids,
-        redis_url=redis_url,
         api_key=api_key,
         autoscale_token=token,
     )
     redeploy(client, service_id=GATEWAY_SERVICE_ID)
     wait_for_success(client, service_id=GATEWAY_SERVICE_ID)
 
+    services = get_services(client)
+    for name, service_id in sorted(services.items()):
+        if service_id == GATEWAY_SERVICE_ID:
+            continue
+        print(f"deleting_service name={name} service_id={service_id}")
+        delete_service(client, service_id=service_id)
+
     print(f"gateway_domain={get_public_domain(client, service_id=GATEWAY_SERVICE_ID)}")
-    print(f"redis_service_id={redis_id}")
-    for runtime_id in seeded_runtime_ids():
-        print(
-            f"runtime={runtime_id} service_id={runtime_service_ids[runtime_id]} "
-            f"base_url={runtime_service_urls[runtime_id]}"
-        )
-    print("Railway async rollout completed.")
+    print("Railway single-service rollout completed.")
     return 0
 
 

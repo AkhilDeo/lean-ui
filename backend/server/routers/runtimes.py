@@ -24,7 +24,7 @@ async def list_runtimes(request: Request) -> RuntimeRegistryResponse:
     registry = get_runtime_registry(request)
     settings = get_runtime_settings(request)
 
-    if settings.gateway_enabled:
+    if settings.gateway_enabled or settings.multi_runtime_enabled:
         return registry.as_response()
 
     runtime = registry.require(settings.runtime_id).model_copy(update={"is_default": True})

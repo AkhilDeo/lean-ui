@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     lean_version: str = "v4.9.0"
     runtime_id: str = "v4.9.0"
+    multi_runtime_enabled: bool = False
     default_runtime_id: str = "v4.9.0"
     gateway_enabled: bool = False
     embedded_worker_enabled: bool = False
@@ -40,6 +41,7 @@ class Settings(BaseSettings):
     railway_region: str = "us-east4-eqdc4a"
     repl_path: Path = BASE_DIR / "repl/.lake/build/bin/repl"
     project_dir: Path = BASE_DIR / "mathlib4"
+    runtime_root: Path = Path("/runtimes")
 
     max_repls: int = max((os.cpu_count() or 1) - 1, 1)
     max_repl_uses: int = -1

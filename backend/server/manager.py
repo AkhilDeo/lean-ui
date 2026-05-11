@@ -4,6 +4,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from time import time
 
 from kimina_client import ReplResponse, Snippet
@@ -60,6 +61,8 @@ class Manager:
         init_repls: dict[str, int] = settings.init_repls,
         min_host_free_mem: int = settings.min_host_free_mem,
         startup_concurrency_limit: int | None = settings.async_startup_concurrency_limit,
+        repl_path: Path = settings.repl_path,
+        project_dir: Path = settings.project_dir,
     ) -> None:
         self.max_repls = max_repls
         self.max_repl_uses = max_repl_uses
@@ -67,6 +70,8 @@ class Manager:
         self.init_repls = init_repls
         self.min_host_free_mem = min_host_free_mem
         self.startup_concurrency_limit = startup_concurrency_limit
+        self.repl_path = Path(repl_path)
+        self.project_dir = Path(project_dir)
 
         self._lock: asyncio.Lock | None = None
         self._cond: asyncio.Condition | None = None
@@ -247,7 +252,11 @@ class Manager:
 
     async def start_new(self, header: str) -> Repl:
         repl = await Repl.create(
-            header, max_repl_uses=self.max_repl_uses, max_repl_mem=self.max_repl_mem
+            header,
+            max_repl_uses=self.max_repl_uses,
+            max_repl_mem=self.max_repl_mem,
+            repl_path=self.repl_path,
+            project_dir=self.project_dir,
         )
         self._busy.add(repl)
         return repl

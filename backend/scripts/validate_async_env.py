@@ -3,9 +3,15 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import Iterable
 
-from server.runtime_registry import runtime_env_key, seeded_runtime_ids
+SCRIPT_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = SCRIPT_DIR.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from server.runtime_registry import seeded_runtime_ids
 
 COMMON_REQUIRED = {
     "LEAN_SERVER_ENVIRONMENT",
@@ -13,7 +19,6 @@ COMMON_REQUIRED = {
     "LEAN_SERVER_ASYNC_METRICS_ENABLED",
     "LEAN_SERVER_ASYNC_ADMISSION_QUEUE_LIMIT",
     "LEAN_SERVER_ASYNC_ALERT_MAX_OLDEST_QUEUED_AGE_SEC",
-    "LEAN_SERVER_REDIS_URL",
     "LEAN_SERVER_ASYNC_RESULT_TTL_SEC",
     "LEAN_SERVER_ASYNC_QUEUE_NAME_LIGHT",
     "LEAN_SERVER_ASYNC_QUEUE_NAME_HEAVY",
@@ -26,6 +31,22 @@ GATEWAY_REQUIRED = {
     "LEAN_SERVER_GATEWAY_ENABLED",
     "LEAN_SERVER_DEFAULT_RUNTIME_ID",
     "LEAN_SERVER_RAILWAY_ENVIRONMENT_ID",
+}
+
+SINGLE_SERVICE_REQUIRED = {
+    "LEAN_SERVER_GATEWAY_ENABLED",
+    "LEAN_SERVER_MULTI_RUNTIME_ENABLED",
+    "LEAN_SERVER_EMBEDDED_WORKER_ENABLED",
+    "LEAN_SERVER_ASYNC_USE_IN_MEMORY_BACKEND",
+    "LEAN_SERVER_DEFAULT_RUNTIME_ID",
+    "LEAN_SERVER_RUNTIME_ID",
+    "LEAN_SERVER_RUNTIME_IDS",
+    "LEAN_SERVER_RUNTIME_ROOT",
+    "LEAN_SERVER_MAX_REPLS",
+    "LEAN_SERVER_MAX_REPL_MEM",
+    "LEAN_SERVER_INIT_REPLS",
+    "LEAN_SERVER_ASYNC_WORKER_CONCURRENCY",
+    "LEAN_SERVER_ASYNC_WORKER_QUEUE_TIER",
 }
 
 RUNTIME_REQUIRED = {
@@ -70,11 +91,12 @@ def required_keys_for_role(role: str) -> set[str]:
         required.update(WORKER_REQUIRED)
     elif normalized_role == "gateway":
         required.update(GATEWAY_REQUIRED)
-        for runtime_id in seeded_runtime_ids():
-            required.add(runtime_env_key(runtime_id, "SERVICE_ID"))
-            required.add(runtime_env_key(runtime_id, "BASE_URL"))
     elif normalized_role == "runtime":
         required.update(RUNTIME_REQUIRED)
+    elif normalized_role in {"single", "single-service", "api"}:
+        required.update(SINGLE_SERVICE_REQUIRED)
+        for runtime_id in seeded_runtime_ids():
+            required.add(f"LEAN_SERVER_RUNTIME_IDS")
     else:
         required.update(API_REQUIRED)
     return required

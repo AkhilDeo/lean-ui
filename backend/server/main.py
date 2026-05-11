@@ -19,6 +19,7 @@ from .routers.health import router as health_router
 from .routers.runtimes import router as runtimes_router
 from .runtime_gateway import RuntimeGateway
 from .runtime_registry import build_runtime_registry, validate_runtime_configuration
+from .runtime_managers import RuntimeManagerRegistry
 from .settings import Environment, Settings
 from .worker import run_worker
 
@@ -57,7 +58,10 @@ def create_app(settings: Settings) -> FastAPI:
             except Exception as e:
                 logger.exception("Failed to connect to database: %s", e)
 
-        runtime_registry = build_runtime_registry(settings.default_runtime_id)
+        runtime_registry = build_runtime_registry(
+            settings.default_runtime_id,
+            env={} if settings.multi_runtime_enabled else None,
+        )
         validate_runtime_configuration(settings, runtime_registry)
         app.state.settings = settings
         app.state.runtime_registry = runtime_registry
@@ -102,6 +106,11 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.runtime_gateway = (
             RuntimeGateway(settings, runtime_registry) if settings.gateway_enabled else None
         )
+        app.state.runtime_managers = (
+            RuntimeManagerRegistry(settings, runtime_registry)
+            if not settings.gateway_enabled and settings.multi_runtime_enabled
+            else None
+        )
         runtime_readiness_task: asyncio.Task[None] | None = None
 
         if settings.async_enabled:
@@ -116,17 +125,25 @@ def create_app(settings: Settings) -> FastAPI:
             app.state.async_jobs = None
 
         if not settings.gateway_enabled:
-            manager = Manager(
-                max_repls=settings.max_repls,
-                max_repl_uses=settings.max_repl_uses,
-                max_repl_mem=settings.max_repl_mem,
-                init_repls=settings.init_repls,
-                min_host_free_mem=settings.min_host_free_mem,
-            )
+            runtime_managers = app.state.runtime_managers
+            if settings.multi_runtime_enabled:
+                assert runtime_managers is not None
+                manager = runtime_managers.get(settings.default_runtime_id)
+            else:
+                manager = Manager(
+                    max_repls=settings.max_repls,
+                    max_repl_uses=settings.max_repl_uses,
+                    max_repl_mem=settings.max_repl_mem,
+                    init_repls=settings.init_repls,
+                    min_host_free_mem=settings.min_host_free_mem,
+                    repl_path=settings.repl_path,
+                    project_dir=settings.project_dir,
+                )
             app.state.manager = manager
 
             async def _warm_runtime_readiness() -> None:
                 try:
+                    assert manager is not None
                     logger.info(
                         "Starting runtime readiness warmup for {} with header '{}'",
                         settings.runtime_id,
@@ -177,6 +194,7 @@ def create_app(settings: Settings) -> FastAPI:
 
             async def _init_repls_background() -> None:
                 try:
+                    assert manager is not None
                     logger.info("Starting background REPL initialization...")
                     await manager.initialize_repls()
                     logger.info("Background REPL initialization completed")
@@ -194,7 +212,10 @@ def create_app(settings: Settings) -> FastAPI:
                     run_worker(
                         settings,
                         jobs=app.state.async_jobs,
-                        manager=manager,
+                        manager=None if settings.multi_runtime_enabled else manager,
+                        runtime_managers=(
+                            runtime_managers if settings.multi_runtime_enabled else None
+                        ),
                         manage_resources=False,
                     ),
                     name="embedded-runtime-worker",
@@ -241,7 +262,10 @@ def create_app(settings: Settings) -> FastAPI:
         if runtime_gateway is not None:
             await runtime_gateway.close()
         manager = getattr(app.state, "manager", None)
-        if manager is not None:
+        runtime_managers = getattr(app.state, "runtime_managers", None)
+        if runtime_managers is not None:
+            await runtime_managers.cleanup()
+        elif manager is not None:
             await manager.cleanup()
         await db.disconnect()
 

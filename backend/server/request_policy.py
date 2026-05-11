@@ -30,7 +30,9 @@ def normalize_request_policy(
 
     effective_debug = debug if settings.allow_client_debug else False
     effective_runtime_id = (
-        settings.default_runtime_id if settings.gateway_enabled else settings.runtime_id
+        settings.default_runtime_id
+        if settings.gateway_enabled or settings.multi_runtime_enabled
+        else settings.runtime_id
     )
     return NormalizedRequestPolicy(
         timeout=effective_timeout,

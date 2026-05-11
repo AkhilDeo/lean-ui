@@ -135,27 +135,35 @@ def validate_runtime_configuration(
                 missing_env.append(runtime_env_key(runtime.runtime_id, "SERVICE_ID"))
             if not runtime.base_url:
                 missing_env.append(runtime_env_key(runtime.runtime_id, "BASE_URL"))
-    elif settings.embedded_worker_enabled:
-        if not settings.async_enabled:
-            errors.append("LEAN_SERVER_EMBEDDED_WORKER_ENABLED requires LEAN_SERVER_ASYNC_ENABLED=true")
-        if not settings.runtime_id:
-            missing_env.append("LEAN_SERVER_RUNTIME_ID")
-        if not settings.runtime_service_id:
-            missing_env.append("LEAN_SERVER_RUNTIME_SERVICE_ID")
-        if not settings.railway_environment_id:
-            missing_env.append("LEAN_SERVER_RAILWAY_ENVIRONMENT_ID")
-        if settings.init_repls:
+    else:
+        if settings.embedded_worker_enabled and not settings.async_enabled:
+            errors.append(
+                "LEAN_SERVER_EMBEDDED_WORKER_ENABLED requires "
+                "LEAN_SERVER_ASYNC_ENABLED=true"
+            )
+        if not settings.multi_runtime_enabled and settings.embedded_worker_enabled:
+            if not settings.runtime_id:
+                missing_env.append("LEAN_SERVER_RUNTIME_ID")
+            if not settings.runtime_service_id:
+                missing_env.append("LEAN_SERVER_RUNTIME_SERVICE_ID")
+            if not settings.railway_environment_id:
+                missing_env.append("LEAN_SERVER_RAILWAY_ENVIRONMENT_ID")
+        if settings.embedded_worker_enabled and settings.init_repls:
             errors.append("LEAN_SERVER_INIT_REPLS must be {} for embedded runtime workers")
         runtime = selected_registry.get(settings.runtime_id)
         if runtime is None:
             errors.append(f"Unknown runtime_id: {settings.runtime_id}")
         else:
-            if settings.lean_version != runtime.lean_version:
+            if not settings.multi_runtime_enabled and settings.lean_version != runtime.lean_version:
                 errors.append(
                     "LEAN_SERVER_LEAN_VERSION must match LEAN_SERVER_RUNTIME_ID "
                     f"({settings.lean_version} != {runtime.lean_version})"
                 )
-            if runtime.service_id and settings.runtime_service_id != runtime.service_id:
+            if (
+                not settings.multi_runtime_enabled
+                and runtime.service_id
+                and settings.runtime_service_id != runtime.service_id
+            ):
                 errors.append(
                     "LEAN_SERVER_RUNTIME_SERVICE_ID must match the seeded runtime registry "
                     f"({settings.runtime_service_id} != {runtime.service_id})"

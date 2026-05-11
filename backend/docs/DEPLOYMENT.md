@@ -1,11 +1,10 @@
-# Railway Multi-Runtime Deployment
+# Railway Single-Service Multi-Runtime Deployment
 
-This backend now runs in two service modes on Railway:
+Production is intended to run as one Railway web service, `lean-ui`.
 
-- `gateway`: always-on API service that validates runtime ids, proxies warm sync checks, wakes cold runtimes, and serves async job status.
-- `runtime`: one service per seeded Lean/Mathlib runtime. Each runtime serves `/api/check` and drains only its own async work. The default runtime stays warm; the non-default runtimes use Railway Serverless so they can sleep when idle and wake on traffic.
+The service owns all seeded Lean/Mathlib runtimes inside one Docker image and selects the runtime in-process from the request `runtime_id`. There are no per-version runtime services, no gateway service, and no separate worker service.
 
-## Seeded runtimes
+## Seeded Runtimes
 
 - `v4.9.0`
 - `v4.15.0`
@@ -13,76 +12,51 @@ This backend now runs in two service modes on Railway:
 - `v4.27.0`
 - `v4.28.0`
 
-## Gateway service
+## Railway Service
 
-Required core env:
-
-```sh
-LEAN_SERVER_ENVIRONMENT=prod
-LEAN_SERVER_GATEWAY_ENABLED=true
-LEAN_SERVER_EMBEDDED_WORKER_ENABLED=false
-LEAN_SERVER_ASYNC_ENABLED=true
-LEAN_SERVER_DEFAULT_RUNTIME_ID=v4.9.0
-LEAN_SERVER_RAILWAY_ENVIRONMENT_ID=<railway-environment-id>
-LEAN_SERVER_REDIS_URL=<shared-redis-url>
-LEAN_SERVER_API_KEY=<shared-api-key>
-LEAN_SERVER_AUTOSCALE_RAILWAY_TOKEN=<railway-api-token>
-```
-
-Required per-runtime Railway wiring:
+Required posture:
 
 ```sh
-LEAN_SERVER_RUNTIME_V4_9_0_SERVICE_ID=<service-id>
-LEAN_SERVER_RUNTIME_V4_9_0_BASE_URL=<private-url>
-LEAN_SERVER_RUNTIME_V4_15_0_SERVICE_ID=<service-id>
-LEAN_SERVER_RUNTIME_V4_15_0_BASE_URL=<private-url>
-LEAN_SERVER_RUNTIME_V4_24_0_SERVICE_ID=<service-id>
-LEAN_SERVER_RUNTIME_V4_24_0_BASE_URL=<private-url>
-LEAN_SERVER_RUNTIME_V4_27_0_SERVICE_ID=<service-id>
-LEAN_SERVER_RUNTIME_V4_27_0_BASE_URL=<private-url>
-LEAN_SERVER_RUNTIME_V4_28_0_SERVICE_ID=<service-id>
-LEAN_SERVER_RUNTIME_V4_28_0_BASE_URL=<private-url>
+sleepApplication=true
+numReplicas=1
+startCommand="python -m server"
+rootDirectory="/backend"
+railwayConfigFile="/backend/railway.toml"
 ```
 
-The gateway will now fail fast at startup if any seeded runtime is missing `SERVICE_ID` or `BASE_URL`.
-
-## Runtime service
-
-Each runtime service gets its own matching Lean version and service id:
+Required env:
 
 ```sh
 LEAN_SERVER_ENVIRONMENT=prod
 LEAN_SERVER_GATEWAY_ENABLED=false
+LEAN_SERVER_MULTI_RUNTIME_ENABLED=true
 LEAN_SERVER_EMBEDDED_WORKER_ENABLED=true
 LEAN_SERVER_ASYNC_ENABLED=true
+LEAN_SERVER_ASYNC_USE_IN_MEMORY_BACKEND=true
 LEAN_SERVER_DEFAULT_RUNTIME_ID=v4.9.0
-LEAN_SERVER_RUNTIME_ID=v4.15.0
-LEAN_SERVER_LEAN_VERSION=v4.15.0
-LEAN_SERVER_RUNTIME_SERVICE_ID=<this-runtime-service-id>
-LEAN_SERVER_RAILWAY_ENVIRONMENT_ID=<railway-environment-id>
-LEAN_SERVER_REDIS_URL=<shared-redis-url>
+LEAN_SERVER_RUNTIME_ID=v4.9.0
+LEAN_SERVER_LEAN_VERSION=v4.9.0
+LEAN_SERVER_RUNTIME_IDS=v4.9.0,v4.15.0,v4.24.0,v4.27.0,v4.28.0
+LEAN_SERVER_RUNTIME_ROOT=/runtimes
 LEAN_SERVER_API_KEY=<shared-api-key>
-LEAN_SERVER_AUTOSCALE_RAILWAY_TOKEN=<railway-api-token>
 LEAN_SERVER_INIT_REPLS={}
-LEAN_SERVER_ASYNC_RESULT_TTL_SEC=3600
 ```
 
-The runtime will fail fast if `LEAN_SERVER_RUNTIME_ID`, `LEAN_SERVER_RUNTIME_SERVICE_ID`, or `LEAN_SERVER_RAILWAY_ENVIRONMENT_ID` is missing, if `LEAN_SERVER_LEAN_VERSION` does not match the runtime id, or if `LEAN_SERVER_INIT_REPLS` is non-empty while the embedded worker is enabled.
+The Docker build installs each runtime under `/runtimes/<runtime_id_slug>/`, for example `/runtimes/v4_28_0/mathlib4` and `/runtimes/v4_28_0/repl/.lake/build/bin/repl`.
 
-Recommended runtime posture:
+## Runtime Behavior
 
-- `v4.9.0`: keep Railway Serverless disabled so one service replica stays warm, set `LEAN_SERVER_MAX_REPLS=4`, `LEAN_SERVER_ASYNC_WORKER_CONCURRENCY=2`, and keep only a small warm pool.
-- non-default runtimes: enable Railway Serverless so Railway sleeps the service when idle and wakes it on private-network traffic from the gateway; keep `LEAN_SERVER_MAX_REPLS=1` and `LEAN_SERVER_ASYNC_WORKER_CONCURRENCY=1`.
+The app keeps one `Manager` per requested `runtime_id`. Switching Lean versions is a manager lookup, not a Railway service hop. REPLs are still reused by import header inside each runtime manager.
+
+Set `LEAN_SERVER_MAX_REPLS=1` in the single-service Railway environment unless the Railway memory limit is raised. Because this value applies per runtime manager, increasing it can multiply the total number of live REPL processes across Lean versions.
 
 ## Validation
 
-Use the env validation helper before deploy:
+Use the helpers before and after deploy:
 
 ```sh
-python scripts/validate_async_env.py gateway
-python scripts/validate_async_env.py runtime
+python scripts/validate_async_env.py single-service
+python scripts/check_railway_state.py
 ```
 
-## Logging
-
-Google Cloud Logging has been removed from the backend. Railway log capture is the supported production log sink.
+The expected production state is exactly one Railway service in the project: `lean-ui`, with app sleeping enabled.

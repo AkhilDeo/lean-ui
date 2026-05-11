@@ -80,6 +80,8 @@ class Repl:
         *,
         max_repl_mem: int,
         max_repl_uses: int,
+        repl_path: Path | None = None,
+        project_dir: Path | None = None,
     ) -> None:
         self.uuid = uuid
         self.header = header
@@ -91,6 +93,8 @@ class Repl:
         self.header_cmd_response: ReplResponse | None = None
 
         self.proc: Process | None = None
+        self.repl_path = repl_path or Path(settings.repl_path)
+        self.project_dir = project_dir or Path(settings.project_dir)
         self.max_memory_bytes = max_repl_mem * 1024 * 1024
         self.max_repl_uses = max_repl_uses
 
@@ -111,7 +115,15 @@ class Repl:
         self._mem_task: asyncio.Task[None] | None = None
 
     @classmethod
-    async def create(cls, header: str, max_repl_uses: int, max_repl_mem: int) -> "Repl":
+    async def create(
+        cls,
+        header: str,
+        max_repl_uses: int,
+        max_repl_mem: int,
+        *,
+        repl_path: Path | None = None,
+        project_dir: Path | None = None,
+    ) -> "Repl":
         if db.connected:
             record = await prisma.repl.create(
                 data={
@@ -126,6 +138,8 @@ class Repl:
                 header=record.header,
                 max_repl_uses=record.max_repl_uses,
                 max_repl_mem=record.max_repl_mem,
+                repl_path=repl_path,
+                project_dir=project_dir,
             )
         return cls(
             uuid=uuid4(),
@@ -133,6 +147,8 @@ class Repl:
             header=header,
             max_repl_uses=max_repl_uses,
             max_repl_mem=max_repl_mem,
+            repl_path=repl_path,
+            project_dir=project_dir,
         )
 
     @property
@@ -149,14 +165,14 @@ class Repl:
         self._loop = asyncio.get_running_loop()
         self._stderr_chunks.clear()
         launch_env = os.environ.copy()
-        launch_env["LEAN_PATH"] = _resolve_lean_path(str(Path(settings.project_dir)))
+        launch_env["LEAN_PATH"] = _resolve_lean_path(str(self.project_dir))
 
         def _preexec() -> None:
             os.setsid()
 
         self.proc = await asyncio.create_subprocess_exec(
-            str(settings.repl_path),
-            cwd=settings.project_dir,
+            str(self.repl_path),
+            cwd=self.project_dir,
             env=launch_env,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,

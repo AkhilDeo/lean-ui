@@ -247,7 +247,7 @@ def _queue_name(base_name: str, runtime_id: str) -> str:
 
 
 def _known_runtime_ids(settings: Settings) -> list[str]:
-    if settings.gateway_enabled:
+    if settings.gateway_enabled or settings.multi_runtime_enabled:
         return build_runtime_registry(settings.default_runtime_id).known_runtime_ids()
     return [settings.runtime_id]
 
@@ -534,37 +534,40 @@ class RedisAsyncJobs:
         queue_tier: str | AsyncQueueTier | None = None,
         runtime_id: str | None = None,
     ) -> AsyncTaskPayload | None:
-        effective_runtime_id = runtime_id or self.settings.runtime_id
+        runtime_ids = [runtime_id] if runtime_id else list(self.runtime_ids)
         requested = (
             AsyncQueueTier.all
             if queue_tier is None
             else self._normalize_tier(queue_tier)
         )
         if requested != AsyncQueueTier.all:
-            task = await self._task_queue(effective_runtime_id, requested).dequeue(
-                timeout_sec=timeout_sec
-            )
-            if task is not None:
-                await self._record_dequeue_count(effective_runtime_id, requested, 1)
-            return task
+            for selected_runtime_id in runtime_ids:
+                task = await self._task_queue(selected_runtime_id, requested).dequeue(
+                    timeout_sec=timeout_sec
+                )
+                if task is not None:
+                    await self._record_dequeue_count(selected_runtime_id, requested, 1)
+                    return task
+            return None
 
         order = [AsyncQueueTier.light, AsyncQueueTier.heavy]
         if self._dequeue_turn % 2 == 1:
             order.reverse()
         self._dequeue_turn += 1
-        for idx, tier in enumerate(order):
-            if idx < len(order) - 1:
-                if await self._task_queue(effective_runtime_id, tier).length() <= 0:
-                    continue
-                wait = 1
-            else:
-                wait = timeout_sec
-            task = await self._task_queue(effective_runtime_id, tier).dequeue(
-                timeout_sec=wait
-            )
-            if task is not None:
-                await self._record_dequeue_count(effective_runtime_id, tier, 1)
-                return task
+        for selected_runtime_id in runtime_ids:
+            for idx, tier in enumerate(order):
+                if idx < len(order) - 1:
+                    if await self._task_queue(selected_runtime_id, tier).length() <= 0:
+                        continue
+                    wait = 1
+                else:
+                    wait = timeout_sec
+                task = await self._task_queue(selected_runtime_id, tier).dequeue(
+                    timeout_sec=wait
+                )
+                if task is not None:
+                    await self._record_dequeue_count(selected_runtime_id, tier, 1)
+                    return task
         return None
 
     async def mark_task_started(self, task: AsyncTaskPayload) -> None:
@@ -1221,39 +1224,44 @@ class InMemoryAsyncJobs:
         queue_tier: str | AsyncQueueTier | None = None,
         runtime_id: str | None = None,
     ) -> AsyncTaskPayload | None:
-        effective_runtime_id = runtime_id or self.settings.runtime_id
+        runtime_ids = [runtime_id] if runtime_id else list(self.runtime_ids)
         requested = (
             AsyncQueueTier.all
             if queue_tier is None
             else self._normalize_tier(queue_tier)
         )
         if requested != AsyncQueueTier.all:
-            task = await self._get_queue(effective_runtime_id, requested).dequeue(
-                timeout_sec=timeout_sec
-            )
-            if task is not None:
-                self._dequeue_count_by_bucket[
-                    self._bucket(effective_runtime_id, requested)
-                ] += 1
-            return task
+            for selected_runtime_id in runtime_ids:
+                task = await self._get_queue(selected_runtime_id, requested).dequeue(
+                    timeout_sec=timeout_sec
+                )
+                if task is not None:
+                    self._dequeue_count_by_bucket[
+                        self._bucket(selected_runtime_id, requested)
+                    ] += 1
+                    return task
+            return None
 
         order = [AsyncQueueTier.light, AsyncQueueTier.heavy]
         if self._dequeue_turn % 2 == 1:
             order.reverse()
         self._dequeue_turn += 1
-        for idx, tier in enumerate(order):
-            if idx < len(order) - 1:
-                if await self._get_queue(effective_runtime_id, tier).length() <= 0:
-                    continue
-                wait = 1
-            else:
-                wait = timeout_sec
-            task = await self._get_queue(effective_runtime_id, tier).dequeue(
-                timeout_sec=wait
-            )
-            if task is not None:
-                self._dequeue_count_by_bucket[self._bucket(effective_runtime_id, tier)] += 1
-                return task
+        for selected_runtime_id in runtime_ids:
+            for idx, tier in enumerate(order):
+                if idx < len(order) - 1:
+                    if await self._get_queue(selected_runtime_id, tier).length() <= 0:
+                        continue
+                    wait = 1
+                else:
+                    wait = timeout_sec
+                task = await self._get_queue(selected_runtime_id, tier).dequeue(
+                    timeout_sec=wait
+                )
+                if task is not None:
+                    self._dequeue_count_by_bucket[
+                        self._bucket(selected_runtime_id, tier)
+                    ] += 1
+                    return task
         return None
 
     async def mark_task_started(self, task: AsyncTaskPayload) -> None:
