@@ -66,7 +66,7 @@ LEAN_SERVER_MAX_TOTAL_REPLS=3
 LEAN_SERVER_ASYNC_WORKER_CONCURRENCY=3
 ```
 
-The Docker build preinstalls each runtime under `/runtimes/<runtime_id_slug>/`, for example `/runtimes/v4_28_0/mathlib4` and `/runtimes/v4_28_0/repl/.lake/build/bin/repl`. Do not rely on live runtime installation for production hot-swapping; it serializes manager creation and creates avoidable queue waits.
+The Docker build installs each runtime under `/runtimes/<runtime_id_slug>/`, for example `/runtimes/v4_28_0/mathlib4` and `/runtimes/v4_28_0/repl/.lake/build/bin/repl`.
 
 ## Runtime Behavior
 
