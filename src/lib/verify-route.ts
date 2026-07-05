@@ -397,13 +397,13 @@ async function retrySyncUntilWarm(
 function validateServerConfig(config: VerifyRouteConfig): VerifyRouteResponse | null {
   if (!config.hasExplicitServerUrl && config.isProduction) {
     return buildConfigErrorResponse(
-      'KIMINA_SERVER_URL environment variable is not configured. Please set it in your Vercel project settings.'
+      'KIMINA_SERVER_URL environment variable is not configured. Please set it in the frontend deployment settings.'
     );
   }
 
   if (config.isProduction && config.hasExplicitServerUrl && !config.apiKey) {
     return buildConfigErrorResponse(
-      'KIMINA_SERVER_API_KEY environment variable is not configured. Please set it in your Vercel project settings to match Railway LEAN_SERVER_API_KEY.'
+      'KIMINA_SERVER_API_KEY environment variable is not configured. Please set it in the frontend deployment settings to match the backend LEAN_SERVER_API_KEY.'
     );
   }
 
