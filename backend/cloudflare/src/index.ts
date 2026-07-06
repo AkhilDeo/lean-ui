@@ -9,7 +9,9 @@ const LEAN_CONTAINER_ENV: Record<string, string> = {
   LEAN_SERVER_PORT: "8080",
   LEAN_SERVER_GATEWAY_ENABLED: "false",
   LEAN_SERVER_AUTOSCALE_ENABLED: "false",
-  LEAN_SERVER_MULTI_RUNTIME_ENABLED: "false",
+  // Multi-runtime with a single runtime id: the single-runtime + embedded
+  // worker path hard-requires Railway service ids in runtime_registry.py.
+  LEAN_SERVER_MULTI_RUNTIME_ENABLED: "true",
   LEAN_SERVER_EMBEDDED_WORKER_ENABLED: "true",
   LEAN_SERVER_ASYNC_ENABLED: "true",
   LEAN_SERVER_ASYNC_USE_IN_MEMORY_BACKEND: "true",
