@@ -112,14 +112,14 @@ Create a `.env.local` file in the root directory (optional):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KIMINA_SERVER_URL` | `http://localhost:10000` | URL of the kimina-lean-server backend |
-| `KIMINA_SERVER_API_KEY` | unset | Server-side bearer token used by the Next.js proxy; in production this must match Railway `LEAN_SERVER_API_KEY` |
+| `KIMINA_SERVER_API_KEY` | unset | Server-side bearer token used by the Next.js proxy; in production this must match the backend `LEAN_SERVER_API_KEY` |
 
 ### Backend Configuration
 
 The backend defaults to Lean 4.9.0. The supported runtimes are Lean 4.9.0, Lean 4.15.0, Lean 4.24.0, Lean 4.27.0, and Lean 4.28.0. Runtime routing is driven by the backend registry. To customize a local runtime service, edit `backend/.env`:
 
 ```bash
-KIMINA_SERVER_URL=https://lean-ui-production.up.railway.app
+KIMINA_SERVER_URL=https://your-backend.example.com
 KIMINA_SERVER_API_KEY=your-shared-backend-key
 
 LEAN_SERVER_LEAN_VERSION=v4.9.0   # Runtime Lean version
@@ -129,7 +129,7 @@ LEAN_SERVER_MAX_TOTAL_REPLS=14     # Optional process-wide cap across runtime ma
 LEAN_SERVER_MAX_WAIT=60            # Max wait time in seconds
 ```
 
-For production deployments, set `KIMINA_SERVER_URL` and `KIMINA_SERVER_API_KEY` in Vercel project settings. Keep `LEAN_SERVER_API_KEY` configured on Railway, and use the same secret value for `KIMINA_SERVER_API_KEY` on Vercel so the frontend proxy can authenticate to `/api/check`.
+For production deployments, set `KIMINA_SERVER_URL` and `KIMINA_SERVER_API_KEY` in Vercel project settings. Keep `LEAN_SERVER_API_KEY` configured on the backend host, and use the same secret value for `KIMINA_SERVER_API_KEY` on Vercel so the frontend proxy can authenticate to `/api/check`.
 
 See the [kimina-lean-server documentation](https://github.com/project-numina/kimina-lean-server) for all options.
 
