@@ -155,6 +155,20 @@ install_runtime() {
   install_repo mathlib4 "$MATHLIB_REPO_URL" "$runtime_id" true "${root}/mathlib4"
 }
 
+cleanup_build_artifacts() {
+  # Drop caches and build intermediates the REPL never reads at runtime:
+  # mathlib olean download cache, elan download/tmp dirs, git metadata, and
+  # compiler IR (.lake/build/ir/*.c) — only .lake/build/lib oleans and the
+  # repl binary are needed to serve requests.
+  rm -rf "$HOME/.cache/mathlib" "$HOME/.elan/downloads" "$HOME/.elan/tmp" || true
+  local d
+  for d in "$LEAN_SERVER_RUNTIME_ROOT" repl mathlib4; do
+    [ -d "$d" ] || continue
+    find "$d" -type d -name .git -prune -exec rm -rf {} + || true
+    find "$d" -type d -path '*/.lake/build/ir' -prune -exec rm -rf {} + || true
+  done
+}
+
 if [ -n "$LEAN_SERVER_RUNTIME_IDS" ]; then
   while IFS= read -r runtime_id; do
     install_runtime "$runtime_id"
@@ -173,3 +187,5 @@ else
   install_repo repl "$REPL_REPO_URL" "$REPL_BRANCH" false repl
   install_repo mathlib4 "$MATHLIB_REPO_URL" "$MATHLIB_BRANCH" true mathlib4
 fi
+
+cleanup_build_artifacts
